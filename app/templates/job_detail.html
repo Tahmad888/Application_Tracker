@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+
+{% block content %}
+  <main class="detail-layout">
+    <section class="card">
+      <div class="section-heading">
+        <h2>{{ job.title }}</h2>
+        <p>{{ job.company }} • {{ job.location }}</p>
+      </div>
+
+      <div class="detail-metadata">
+        <span><strong>Posted:</strong> {{ job.posted_at }}</span>
+        <span><strong>Source:</strong> {{ job.source }} ({{ job.source_type }})</span>
+        <span><strong>Match score:</strong> {{ "%.1f"|format(job.match_score) }}</span>
+      </div>
+
+      <p class="detail-copy">{{ job.description }}</p>
+
+      <div class="query-list">
+        <span class="meta-label">Matched keywords</span>
+        {% for keyword in job.matched_keywords %}
+          <code>{{ keyword }}</code>
+        {% endfor %}
+      </div>
+
+      <div class="detail-actions">
+        <a class="secondary-button link-button" href="{{ job.job_url }}" target="_blank" rel="noreferrer">Open Listing</a>
+
+        {% if job.applied %}
+          <span class="status-pill">Applied</span>
+        {% else %}
+          <form method="post" action="{{ url_for('dashboard.apply', job_id=job.id) }}">
+            <button type="submit">Mark Applied</button>
+          </form>
+        {% endif %}
+      </div>
+    </section>
+  </main>
+{% endblock %}

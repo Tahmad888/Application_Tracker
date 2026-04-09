@@ -1,0 +1,130 @@
+{% extends "base.html" %}
+
+{% block content %}
+  <main class="dashboard-grid">
+    <section class="card">
+      <div class="section-heading">
+        <h2>1. Parse Resume</h2>
+        <p>Paste resume text or upload a plain text file. This MVP extracts keywords locally.</p>
+      </div>
+
+      <form class="resume-form" method="post" action="{{ url_for('dashboard.upload_resume') }}" enctype="multipart/form-data">
+        <label for="resume_text">Resume text</label>
+        <textarea id="resume_text" name="resume_text" rows="12" placeholder="Paste a resume summary, experience, skills, certifications, and tools here."></textarea>
+
+        <label for="resume_file">Resume file</label>
+        <input id="resume_file" type="file" name="resume_file" accept=".txt">
+
+        <button type="submit">Extract Keywords and Match Jobs</button>
+      </form>
+    </section>
+
+    <section class="card">
+      <div class="section-heading">
+        <h2>2. ATS Profile</h2>
+        <p>Top weighted keywords and generated search queries from the latest resume.</p>
+      </div>
+
+      {% if data.resume %}
+        <div class="meta-block">
+          <span class="meta-label">Latest resume</span>
+          <strong>{{ data.resume.filename }}</strong>
+        </div>
+
+        <div class="chip-group">
+          {% for keyword in data.keywords %}
+            <span class="chip">
+              <strong>{{ keyword.keyword }}</strong>
+              <small>{{ keyword.category }} • {{ "%.1f"|format(keyword.score) }}</small>
+            </span>
+          {% endfor %}
+        </div>
+
+        <div class="query-list">
+          <span class="meta-label">Generated search queries</span>
+          {% for query in data.queries %}
+            <code>{{ query }}</code>
+          {% endfor %}
+        </div>
+      {% else %}
+        <p class="empty-state">No resume parsed yet. Once you upload one, this panel will show the extracted ATS profile.</p>
+      {% endif %}
+    </section>
+
+    <section class="card">
+      <div class="section-heading">
+        <h2>3. Gmail Monitor</h2>
+        <p>Connect Gmail with OAuth so the app can check for interview invites, rejections, and follow-ups.</p>
+      </div>
+
+      {% if data.gmail_connection %}
+        <div class="meta-block">
+          <span class="meta-label">Connected mailbox</span>
+          <strong>{{ data.gmail_connection.email }}</strong>
+        </div>
+
+        <form method="post" action="{{ url_for('dashboard.check_gmail') }}">
+          <button class="secondary-button" type="submit">Check Gmail Now</button>
+        </form>
+
+        {% set recent_messages = session.get('gmail_recent_messages', []) %}
+        {% if recent_messages %}
+          <div class="email-list">
+            {% for message in recent_messages %}
+              <article class="email-row">
+                <strong>{{ message.subject or "No subject" }}</strong>
+                <p>{{ message.from }}</p>
+                <p class="muted">{{ message.date }}</p>
+                <p class="muted">{{ message.snippet }}</p>
+              </article>
+            {% endfor %}
+          </div>
+        {% endif %}
+      {% else %}
+        <p class="empty-state">Gmail is not connected yet.</p>
+        <a class="link-button" href="{{ url_for('dashboard.connect_gmail') }}">Connect Gmail</a>
+      {% endif %}
+    </section>
+
+    <section class="card card-wide">
+      <div class="section-heading">
+        <h2>4. Matched Jobs</h2>
+        <p>These are sample development listings ranked by keyword overlap. Real source connectors come next.</p>
+      </div>
+
+      {% if data.jobs %}
+        <div class="jobs-table">
+          <div class="jobs-head">
+            <span>Role</span>
+            <span>Posted</span>
+            <span>Match</span>
+            <span>Status</span>
+          </div>
+
+          {% for job in data.jobs %}
+            <article class="job-row">
+              <div>
+                <a class="job-link" href="{{ url_for('dashboard.job_detail', job_id=job.id) }}">{{ job.title }}</a>
+                <p>{{ job.company }} • {{ job.location }}</p>
+                <p class="muted">{{ job.source }} • {{ job.source_type }}</p>
+              </div>
+              <span>{{ job.posted_at }}</span>
+              <span>{{ "%.1f"|format(job.match_score) }}</span>
+              <div class="row-actions">
+                {% if job.applied %}
+                  <span class="status-pill">Applied</span>
+                {% else %}
+                  <form method="post" action="{{ url_for('dashboard.apply', job_id=job.id) }}">
+                    <button class="secondary-button" type="submit">Mark Applied</button>
+                  </form>
+                {% endif %}
+              </div>
+            </article>
+          {% endfor %}
+        </div>
+      {% else %}
+        <p class="empty-state">No job matches yet. Parse a resume to populate this list.</p>
+      {% endif %}
+    </section>
+  </main>
+{% endblock %}
