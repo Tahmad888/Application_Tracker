@@ -9,7 +9,12 @@ from .gmail_oauth import (
     list_recent_job_emails,
 )
 from .google_sheets import SheetsConfigError, SheetsSyncError, sync_application
-from .job_tracker import JobTrackerError, build_tailored_resume, fetch_job_posting
+from .job_tracker import (
+    JobTrackerError,
+    build_confirmed_job,
+    build_tailored_resume,
+    preview_job_posting,
+)
 from .matching import score_jobs
 from .parser import extract_keywords, infer_candidate_profile
 from .resume_ingest import ResumeParseError, extract_resume_text
@@ -144,6 +149,7 @@ def gmail_check():
 @api_bp.post("/tracker/intake")
 def tracker_intake():
     payload = request.form if request.form else (request.get_json(silent=True) or {})
+    stage = str(payload.get("stage", "preview")).strip().lower() or "preview"
     job_url = str(payload.get("job_url", "")).strip()
     resume_text = str(payload.get("resume_text", "")).strip()
     notes = str(payload.get("notes", "")).strip()
@@ -159,10 +165,12 @@ def tracker_intake():
         return jsonify({"ok": False, "message": "Paste a job link to track it."}), 400
 
     try:
-        tracked_job = fetch_job_posting(job_url)
+        review = preview_job_posting(job_url)
     except JobTrackerError as exc:
         return jsonify({"ok": False, "message": str(exc)}), 400
 
+    parsed_resume_text = ""
+    parsed_filename = filename
     tailored = None
     if resume_text or raw_bytes:
         try:
@@ -175,10 +183,46 @@ def tracker_intake():
         except ResumeParseError as exc:
             return jsonify({"ok": False, "message": str(exc)}), 400
 
-        save_resume(filename=parsed_filename, raw_text=parsed_resume_text)
-        tailored = build_tailored_resume(tracked_job, parsed_resume_text)
+    if stage == "preview":
+        if parsed_resume_text:
+            tailored = build_tailored_resume(review.parsed_job, parsed_resume_text)
 
-    job_record = upsert_manual_job(tracked_job.to_record(), status="Applied", notes=notes)
+        message = "Job details parsed. Review and confirm before saving."
+        if not review.requires_confirmation:
+            message = "Job details look strong. Confirm to save and sync this application."
+
+        return jsonify(
+            {
+                "ok": True,
+                "message": message,
+                "data": {
+                    **review.to_response(),
+                    "tailored_resume": tailored,
+                },
+            }
+        )
+
+    if stage != "confirm":
+        return jsonify({"ok": False, "message": "Unsupported tracker stage."}), 400
+
+    confirmed_job = build_confirmed_job(
+        job_url=job_url,
+        title=str(payload.get("title", "")).strip() or review.parsed_job.title,
+        company=str(payload.get("company", "")).strip() or review.parsed_job.company,
+        location=str(payload.get("location", "")).strip() or review.parsed_job.location,
+        posted_at=str(payload.get("posted_at", "")).strip() or review.parsed_job.posted_at,
+        source=str(payload.get("source", "")).strip() or review.parsed_job.source,
+        source_type=str(payload.get("source_type", "")).strip() or review.parsed_job.source_type,
+        description=str(payload.get("description", "")).strip() or review.parsed_job.description,
+        description_snippet=str(payload.get("description_snippet", "")).strip()
+        or review.parsed_job.description_snippet,
+    )
+
+    if parsed_resume_text:
+        save_resume(filename=parsed_filename, raw_text=parsed_resume_text)
+        tailored = build_tailored_resume(confirmed_job, parsed_resume_text)
+
+    job_record = upsert_manual_job(confirmed_job.to_record(), status="Applied", notes=notes)
 
     sync_message = "Tracked job saved."
     try:
@@ -201,6 +245,7 @@ def tracker_intake():
                 "dashboard": fetch_dashboard_data(),
                 "tracked_job": job_record,
                 "tailored_resume": tailored,
+                **review.to_response(),
             },
         }
     )

@@ -1,10 +1,10 @@
 import unittest
 
 from app.job_tracker import (
+    analyze_parse_confidence,
     build_tailored_resume,
     choose_best_title,
     parse_job_posting_html,
-    should_attempt_rendered_fallback,
 )
 
 
@@ -211,21 +211,59 @@ class JobTrackerTests(unittest.TestCase):
 
         self.assertEqual(job.title, "Business Systems Analyst")
 
-    def test_low_confidence_draft_triggers_rendered_fallback(self):
+    def test_low_confidence_review_flags_obvious_junk_titles(self):
         html = """
         <html>
           <head>
-            <title>S</title>
-            <script>window.__STATE__ = {};</script>
+            <title>Community-browser-not-support-message</title>
+            <meta name="description" content="This posting should not be stored without review." />
           </head>
-          <body><div id="root"></div></body>
+          <body><h1>Community-browser-not-support-message</h1></body>
         </html>
         """
 
-        draft = parse_job_posting_html("https://apply.example.com/v1/s/?job=123", html)
+        job = parse_job_posting_html("https://apply.example.com/jobs/123", html)
+        review = analyze_parse_confidence(job)
 
-        self.assertTrue(should_attempt_rendered_fallback(draft, html))
+        self.assertTrue(review.requires_confirmation)
+        self.assertEqual(review.confidence_level, "low")
+        self.assertTrue(review.parse_warnings)
 
+    def test_low_confidence_review_flags_script_paths(self):
+        html = """
+        <html>
+          <head>
+            <title>/jqueryui/1.13.2/jquery-ui.min.js</title>
+            <meta name="description" content="Thin page shell" />
+          </head>
+          <body><h1>/jqueryui/1.13.2/jquery-ui.min.js</h1></body>
+        </html>
+        """
+
+        job = parse_job_posting_html("https://apply.example.com/jobs/456", html)
+        review = analyze_parse_confidence(job)
+
+        self.assertTrue(review.requires_confirmation)
+        self.assertLess(review.confidence_score, 60)
+        self.assertTrue(any("script path" in warning.lower() for warning in review.parse_warnings))
+
+    def test_high_confidence_review_for_real_role_title(self):
+        html = """
+        <html>
+          <head>
+            <title>Business Systems Analyst</title>
+            <meta name="description" content="Support ERP workflows, reporting, and stakeholder documentation." />
+          </head>
+          <body><h1>Business Systems Analyst</h1></body>
+        </html>
+        """
+
+        job = parse_job_posting_html("https://jobs.example.com/business-systems-analyst", html)
+        review = analyze_parse_confidence(job)
+
+        self.assertEqual(review.confidence_level, "high")
+        self.assertFalse(review.requires_confirmation)
+        self.assertFalse(review.parse_warnings)
 
 if __name__ == "__main__":
     unittest.main()

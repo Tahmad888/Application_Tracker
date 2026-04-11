@@ -42,7 +42,33 @@ type TailoredResume = {
   target_summary: string;
   prioritized_skills: string[];
   alignment_notes: string[];
+  matched_strengths?: string[];
+  missing_requirements?: string[];
+  project_suggestions?: string[];
+  experience_suggestions?: string[];
   tailored_text: string;
+};
+
+type TrackedJobDraft = {
+  external_id: string;
+  title: string;
+  company: string;
+  location: string;
+  posted_at: string;
+  source: string;
+  source_type: string;
+  job_url: string;
+  description: string;
+  description_snippet: string;
+  seeded_at: string;
+};
+
+type TrackerPreview = {
+  parsed_job: TrackedJobDraft;
+  confidence_score: number;
+  confidence_level: string;
+  parse_warnings: string[];
+  requires_confirmation: boolean;
 };
 
 type Job = {
@@ -113,6 +139,8 @@ export default function DashboardClient({
   const [trackerResumeFile, setTrackerResumeFile] = useState<File | null>(null);
   const [trackerNotes, setTrackerNotes] = useState("");
   const [tailoredResume, setTailoredResume] = useState<TailoredResume | null>(null);
+  const [trackerPreview, setTrackerPreview] = useState<TrackerPreview | null>(null);
+  const [confirmedJob, setConfirmedJob] = useState<TrackedJobDraft | null>(null);
   const [message, setMessage] = useState<string | null>(
     authLevel === "error" ? null : authMessage,
   );
@@ -210,9 +238,65 @@ export default function DashboardClient({
     setTailoredResume(null);
 
     const body = new FormData();
+    body.append("stage", "preview");
     body.append("job_url", jobUrl);
     body.append("resume_text", trackerResumeText);
     body.append("notes", trackerNotes);
+    if (trackerResumeFile) body.append("resume_file", trackerResumeFile);
+
+    const response = await fetch(`${API_BASE}/api/tracker/intake`, { method: "POST", body });
+    const payload = (await response.json()) as {
+      ok: boolean;
+      message: string;
+      data?: {
+        parsed_job: TrackedJobDraft;
+        confidence_score: number;
+        confidence_level: string;
+        parse_warnings: string[];
+        requires_confirmation: boolean;
+        tailored_resume?: TailoredResume | null;
+      };
+    };
+
+    if (!response.ok || !payload.ok || !payload.data) {
+      setError(payload.message || "Could not track that job link.");
+      return;
+    }
+
+    setMessage(payload.message);
+    setTrackerPreview({
+      parsed_job: payload.data.parsed_job,
+      confidence_score: payload.data.confidence_score,
+      confidence_level: payload.data.confidence_level,
+      parse_warnings: payload.data.parse_warnings,
+      requires_confirmation: payload.data.requires_confirmation,
+    });
+    setConfirmedJob(payload.data.parsed_job);
+    setTailoredResume(payload.data.tailored_resume ?? null);
+  }
+
+  async function handleTrackerConfirm() {
+    if (!confirmedJob) {
+      setError("Preview the job first so you can confirm the extracted details.");
+      return;
+    }
+
+    setMessage(null);
+    setError(null);
+
+    const body = new FormData();
+    body.append("stage", "confirm");
+    body.append("job_url", jobUrl);
+    body.append("resume_text", trackerResumeText);
+    body.append("notes", trackerNotes);
+    body.append("title", confirmedJob.title);
+    body.append("company", confirmedJob.company);
+    body.append("location", confirmedJob.location);
+    body.append("posted_at", confirmedJob.posted_at);
+    body.append("source", confirmedJob.source);
+    body.append("source_type", confirmedJob.source_type);
+    body.append("description", confirmedJob.description);
+    body.append("description_snippet", confirmedJob.description_snippet);
     if (trackerResumeFile) body.append("resume_file", trackerResumeFile);
 
     const response = await fetch(`${API_BASE}/api/tracker/intake`, { method: "POST", body });
@@ -226,13 +310,15 @@ export default function DashboardClient({
     };
 
     if (!response.ok || !payload.ok || !payload.data) {
-      setError(payload.message || "Could not track that job link.");
+      setError(payload.message || "Could not save that tracked job.");
       return;
     }
 
     setMessage(payload.message);
     setData(payload.data.dashboard);
     setTailoredResume(payload.data.tailored_resume ?? null);
+    setTrackerPreview(null);
+    setConfirmedJob(null);
     setJobUrl("");
     setTrackerResumeText("");
     setTrackerResumeFile(null);
@@ -1309,7 +1395,11 @@ export default function DashboardClient({
                         type="url"
                         className="field-input"
                         value={jobUrl}
-                        onChange={(e) => setJobUrl(e.target.value)}
+                        onChange={(e) => {
+                          setJobUrl(e.target.value);
+                          setTrackerPreview(null);
+                          setConfirmedJob(null);
+                        }}
                         placeholder="https://company.com/careers/job-posting"
                         required
                       />
@@ -1344,9 +1434,145 @@ export default function DashboardClient({
                     </div>
                     <div>
                       <button className="btn-primary" type="submit" disabled={isPending}>
-                        {iconDoc} Save & Tailor Resume
+                        {iconDoc} Preview Job & Tailor Resume
                       </button>
                     </div>
+
+                    {trackerPreview && confirmedJob && (
+                      <div
+                        style={{
+                          marginTop: 8,
+                          padding: 16,
+                          borderRadius: 14,
+                          border: "1px solid var(--border-light)",
+                          background: "rgba(255,255,255,0.02)",
+                          display: "grid",
+                          gap: 14,
+                        }}
+                      >
+                        <div style={{ display: "flex", flexWrap: "wrap", gap: 10, alignItems: "center" }}>
+                          <p className="field-label" style={{ marginBottom: 0 }}>Parsed Job Review</p>
+                          <span
+                            style={{
+                              display: "inline-flex",
+                              alignItems: "center",
+                              gap: 6,
+                              borderRadius: 999,
+                              padding: "6px 10px",
+                              fontSize: 11,
+                              textTransform: "uppercase",
+                              letterSpacing: "0.08em",
+                              color: trackerPreview.confidence_level === "high" ? "#0d0d0f" : "var(--text-primary)",
+                              background:
+                                trackerPreview.confidence_level === "high"
+                                  ? "var(--gold)"
+                                  : trackerPreview.confidence_level === "medium"
+                                    ? "rgba(200,169,110,0.18)"
+                                    : "rgba(224,112,112,0.16)",
+                              border: "1px solid var(--border-light)",
+                            }}
+                          >
+                            {trackerPreview.confidence_level} confidence · {trackerPreview.confidence_score}
+                          </span>
+                        </div>
+
+                        {trackerPreview.parse_warnings.length > 0 && (
+                          <div
+                            style={{
+                              borderRadius: 12,
+                              border: "1px solid rgba(224,112,112,0.25)",
+                              background: "rgba(224,112,112,0.08)",
+                              padding: 12,
+                              display: "grid",
+                              gap: 8,
+                            }}
+                          >
+                            <p className="field-label" style={{ marginBottom: 0, color: "#f3c1c1" }}>
+                              Review Needed
+                            </p>
+                            <div className="alignment-list">
+                              {trackerPreview.parse_warnings.map((warning) => (
+                                <div className="alignment-item" key={warning}>{warning}</div>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+
+                        <div className="field">
+                          <label className="field-label">Job title</label>
+                          <input
+                            type="text"
+                            className="field-input"
+                            value={confirmedJob.title}
+                            onChange={(e) =>
+                              setConfirmedJob({ ...confirmedJob, title: e.target.value })
+                            }
+                          />
+                        </div>
+                        <div className="field">
+                          <label className="field-label">Company</label>
+                          <input
+                            type="text"
+                            className="field-input"
+                            value={confirmedJob.company}
+                            onChange={(e) =>
+                              setConfirmedJob({ ...confirmedJob, company: e.target.value })
+                            }
+                          />
+                        </div>
+                        <div className="field">
+                          <label className="field-label">Location</label>
+                          <input
+                            type="text"
+                            className="field-input"
+                            value={confirmedJob.location}
+                            onChange={(e) =>
+                              setConfirmedJob({ ...confirmedJob, location: e.target.value })
+                            }
+                          />
+                        </div>
+                        <div className="field">
+                          <label className="field-label">Description snippet</label>
+                          <textarea
+                            className="field-textarea"
+                            value={confirmedJob.description_snippet}
+                            onChange={(e) =>
+                              setConfirmedJob({
+                                ...confirmedJob,
+                                description_snippet: e.target.value,
+                                description: e.target.value || confirmedJob.description,
+                              })
+                            }
+                          />
+                        </div>
+
+                        <div style={{ display: "flex", flexWrap: "wrap", gap: 12 }}>
+                          <button
+                            className="btn-primary"
+                            type="button"
+                            disabled={isPending}
+                            onClick={() => {
+                              startTransition(() => {
+                                void handleTrackerConfirm();
+                              });
+                            }}
+                          >
+                            {iconDoc} Confirm & Save
+                          </button>
+                          <button
+                            className="btn-ghost"
+                            type="button"
+                            onClick={() => {
+                              setTrackerPreview(null);
+                              setConfirmedJob(null);
+                              setTailoredResume(null);
+                            }}
+                          >
+                            Clear Review
+                          </button>
+                        </div>
+                      </div>
+                    )}
                   </form>
                 </div>
 
@@ -1372,6 +1598,46 @@ export default function DashboardClient({
                           ))}
                         </div>
                       </div>
+                      {!!tailoredResume.matched_strengths?.length && (
+                        <div>
+                          <p className="field-label" style={{ marginBottom: 10 }}>Matched Strengths</p>
+                          <div className="alignment-list">
+                            {tailoredResume.matched_strengths.map((item) => (
+                              <div className="alignment-item" key={item}>{item}</div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                      {!!tailoredResume.missing_requirements?.length && (
+                        <div>
+                          <p className="field-label" style={{ marginBottom: 10 }}>Missing Requirements</p>
+                          <div className="alignment-list">
+                            {tailoredResume.missing_requirements.map((item) => (
+                              <div className="alignment-item" key={item}>{item}</div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                      {!!tailoredResume.experience_suggestions?.length && (
+                        <div>
+                          <p className="field-label" style={{ marginBottom: 10 }}>Experience Suggestions</p>
+                          <div className="alignment-list">
+                            {tailoredResume.experience_suggestions.map((item) => (
+                              <div className="alignment-item" key={item}>{item}</div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                      {!!tailoredResume.project_suggestions?.length && (
+                        <div>
+                          <p className="field-label" style={{ marginBottom: 10 }}>Project Suggestions</p>
+                          <div className="alignment-list">
+                            {tailoredResume.project_suggestions.map((item) => (
+                              <div className="alignment-item" key={item}>{item}</div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
                       <div>
                         <p className="field-label" style={{ marginBottom: 10 }}>Tailored Resume Text</p>
                         <pre className="code-block">{tailoredResume.tailored_text}</pre>

@@ -205,19 +205,33 @@ class TrackedJobDraft:
         }
 
 
+@dataclass(frozen=True)
+class TrackerParseReview:
+    parsed_job: TrackedJobDraft
+    confidence_score: int
+    confidence_level: str
+    parse_warnings: list[str]
+    requires_confirmation: bool
+
+    def to_response(self) -> dict[str, Any]:
+        return {
+            "parsed_job": self.parsed_job.to_record(),
+            "confidence_score": self.confidence_score,
+            "confidence_level": self.confidence_level,
+            "parse_warnings": self.parse_warnings,
+            "requires_confirmation": self.requires_confirmation,
+        }
+
+
 def fetch_job_posting(job_url: str) -> TrackedJobDraft:
     normalized = normalize_url(job_url)
     html = download_html(normalized)
-    draft = parse_job_posting_html(normalized, html)
+    return parse_job_posting_html(normalized, html)
 
-    if should_attempt_rendered_fallback(draft, html):
-        rendered_html = download_rendered_html(normalized)
-        if rendered_html:
-            rendered_draft = parse_job_posting_html(normalized, rendered_html)
-            if score_title_candidate(rendered_draft.title) > score_title_candidate(draft.title):
-                return rendered_draft
 
-    return draft
+def preview_job_posting(job_url: str) -> TrackerParseReview:
+    tracked_job = fetch_job_posting(job_url)
+    return analyze_parse_confidence(tracked_job)
 
 
 def normalize_url(job_url: str) -> str:
@@ -246,30 +260,6 @@ def download_html(job_url: str) -> str:
         raise JobTrackerError(
             "The job link could not be read right now. Try the direct posting URL instead of a redirect."
         ) from exc
-
-
-def download_rendered_html(job_url: str) -> str:
-    try:
-        from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
-        from playwright.sync_api import sync_playwright
-    except ImportError:
-        return ""
-
-    try:
-        with sync_playwright() as playwright:
-            browser = playwright.chromium.launch(headless=True)
-            page = browser.new_page()
-            try:
-                page.goto(job_url, wait_until="domcontentloaded", timeout=15000)
-                page.wait_for_timeout(1500)
-                html = page.content()
-            except PlaywrightTimeoutError:
-                html = page.content()
-            finally:
-                browser.close()
-        return html
-    except Exception:
-        return ""
 
 
 def parse_job_posting_html(job_url: str, html: str) -> TrackedJobDraft:
@@ -356,6 +346,98 @@ def parse_job_posting_html(job_url: str, html: str) -> TrackedJobDraft:
         description=clean_description,
         description_snippet=description_snippet,
         seeded_at=f"{date.today().isoformat()}T08:00:00Z",
+    )
+
+
+def build_confirmed_job(
+    *,
+    job_url: str,
+    title: str,
+    company: str,
+    location: str,
+    posted_at: str = "",
+    source: str = "",
+    source_type: str = "manual tracker",
+    description: str = "",
+    description_snippet: str = "",
+) -> TrackedJobDraft:
+    normalized_url = normalize_url(job_url)
+    domain = urlparse(normalized_url).netloc.lower()
+    clean_title = clean_text(title) or "Untitled Job"
+    clean_company = clean_text(company) or infer_company_from_domain(domain)
+    clean_location = clean_text(location) or "Location not listed"
+    clean_description = clean_text(description) or clean_text(description_snippet) or f"Tracked from {normalized_url}"
+    clean_snippet = clean_text(description_snippet) or truncate_text(clean_description, 220)
+
+    return TrackedJobDraft(
+        external_id=f"tracked-{sha1(normalized_url.encode('utf-8')).hexdigest()[:16]}",
+        title=normalize_role_case(clean_title),
+        company=clean_company,
+        location=clean_location,
+        posted_at=normalize_date(posted_at) or date.today().isoformat(),
+        source=clean_text(source) or infer_source_name(domain),
+        source_type=clean_text(source_type) or "manual tracker",
+        job_url=normalized_url,
+        description=clean_description,
+        description_snippet=truncate_text(clean_snippet, 220),
+        seeded_at=f"{date.today().isoformat()}T08:00:00Z",
+    )
+
+
+def analyze_parse_confidence(job: TrackedJobDraft) -> TrackerParseReview:
+    warnings: list[str] = []
+    title_score = score_title_candidate(job.title)
+    confidence = 68 + max(min(title_score, 8), -8) * 4
+    lowered_title = job.title.lower().strip()
+    lowered_company = job.company.lower().strip()
+    lowered_source = job.source.lower().strip()
+
+    if title_score < 4:
+        warnings.append("The extracted job title looks weak or incomplete.")
+        confidence -= 28
+
+    if looks_like_file_or_path(job.title):
+        warnings.append("The title looks like a script path or site asset instead of a real role.")
+        confidence -= 42
+
+    if looks_like_browser_or_shell_text(job.title):
+        warnings.append("The title looks like browser support text or a site shell message.")
+        confidence -= 38
+
+    if looks_like_markup_or_attribute(job.title):
+        warnings.append("The title looks like a page attribute or code fragment, not a job title.")
+        confidence -= 30
+
+    if looks_like_generic_shell(job.title):
+        warnings.append("The page exposed a generic careers shell instead of a specific job title.")
+        confidence -= 24
+
+    if lowered_title and lowered_title in {lowered_company, lowered_source}:
+        warnings.append("The parsed title matches the company/source name, which is usually a bad sign.")
+        confidence -= 24
+
+    if job.location == "Location not listed":
+        confidence -= 5
+
+    if len(job.description_snippet) < 50:
+        confidence -= 8
+
+    confidence = max(0, min(100, confidence))
+    if confidence >= 80 and not warnings:
+        level = "high"
+    elif confidence >= 60:
+        level = "medium"
+    else:
+        level = "low"
+
+    requires_confirmation = level != "high" or bool(warnings)
+
+    return TrackerParseReview(
+        parsed_job=job,
+        confidence_score=confidence,
+        confidence_level=level,
+        parse_warnings=dedupe_preserve_order(warnings),
+        requires_confirmation=requires_confirmation,
     )
 
 
@@ -599,28 +681,6 @@ def normalize_date(value: str) -> str:
     return value[:10]
 
 
-def should_attempt_rendered_fallback(draft: TrackedJobDraft, html: str) -> bool:
-    title_score = score_title_candidate(draft.title)
-    lowered_html = html.lower()
-    shell_signals = (
-        "application/json",
-        "__next",
-        "window.__",
-        "hydration",
-        "react-root",
-        "id=\"root\"",
-        "data-reactroot",
-    )
-
-    if title_score < 6:
-        return True
-    if draft.title.lower() in {draft.company.lower(), draft.source.lower()}:
-        return True
-    if len(draft.description.strip()) < 120 and any(signal in lowered_html for signal in shell_signals):
-        return True
-    return False
-
-
 def extract_job_demands(job: TrackedJobDraft) -> list[JobDemand]:
     lowered = f"{job.title} {job.description}".lower()
     demands: list[JobDemand] = []
@@ -843,6 +903,58 @@ def score_title_candidate(value: str) -> int:
         score += 1
 
     return score
+
+
+def looks_like_file_or_path(value: str) -> bool:
+    lowered = value.lower().strip()
+    if lowered.startswith("/"):
+        return True
+    if re.search(r"\.(js|css|json|svg|png|jpg|jpeg|ico|min)$", lowered):
+        return True
+    if "/" in lowered and re.search(r"/[\w.\-]+", lowered):
+        return True
+    return False
+
+
+def looks_like_browser_or_shell_text(value: str) -> bool:
+    lowered = value.lower().strip()
+    shell_phrases = {
+        "browser-not-support",
+        "browser not support",
+        "browser not supported",
+        "unsupported browser",
+        "community-browser-not-support-message",
+        "not-support-message",
+        "please enable javascript",
+    }
+    return any(phrase in lowered for phrase in shell_phrases)
+
+
+def looks_like_markup_or_attribute(value: str) -> bool:
+    lowered = value.lower().strip()
+    if lowered.startswith("data-") or "=" in lowered:
+        return True
+    if lowered in {"count", "undefined", "null", "true", "false"}:
+        return True
+    return False
+
+
+def looks_like_generic_shell(value: str) -> bool:
+    lowered = value.lower().strip()
+    generic_shells = {
+        "careers",
+        "jobs",
+        "job search",
+        "search results",
+        "apply",
+        "application",
+        "open positions",
+    }
+    if lowered in generic_shells:
+        return True
+    if lowered.endswith(" careers") or lowered.startswith("careers "):
+        return True
+    return False
 
 
 def infer_company_from_title_candidates(candidates: list[str]) -> str:
