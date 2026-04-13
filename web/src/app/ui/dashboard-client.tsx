@@ -1,6 +1,15 @@
 "use client";
 
 import { FormEvent, useEffect, useRef, useState, useTransition } from "react";
+import { Doughnut } from "react-chartjs-2";
+import {
+  Chart as ChartJS,
+  ArcElement,
+  Tooltip,
+  Legend,
+} from "chart.js";
+
+ChartJS.register(ArcElement, Tooltip, Legend);
 
 type Keyword = {
   category: string;
@@ -30,6 +39,22 @@ type EmailMessage = {
   subject: string;
   date: string;
   snippet: string;
+};
+
+type StatusNotification = {
+  id: number;
+  job_id: number;
+  title: string;
+  company: string;
+  old_status: string;
+  new_status: string;
+  source: string;
+  email_id: string;
+  email_subject: string;
+  matched_from: string;
+  email_snippet: string;
+  observed_at: string;
+  is_seen: number;
 };
 
 type TrackerStats = {
@@ -105,6 +130,7 @@ type DashboardData = {
   jobs: Job[];
   tracker_stats: TrackerStats;
   gmail_connection: GmailConnection | null;
+  status_notifications: StatusNotification[];
 };
 
 type DashboardClientProps = {
@@ -123,6 +149,109 @@ const SCORE_LABELS: Record<string, string> = {
   location_fit: "Location",
   freshness_fit: "Freshness",
 };
+
+function JobTypePieChart({ jobs }: { jobs: { title: string }[] }) {
+  const categorize = (title: string): string => {
+    const t = title.toLowerCase();
+    if (t.includes("security") || t.includes("cyber")) return "Security";
+    if (t.includes("support") || t.includes("helpdesk") || t.includes("help desk")) return "Tech Support";
+    if (t.includes("it ") || t.includes("information tech") || t.includes("systems")) return "IT";
+    if (t.includes("implementation") || t.includes("specialist")) return "Specialist";
+    return "Other";
+  };
+
+  const counts: Record<string, number> = {};
+  jobs.forEach((job) => {
+    const cat = categorize(job.title);
+    counts[cat] = (counts[cat] ?? 0) + 1;
+  });
+
+  const labels = Object.keys(counts);
+  const values = Object.values(counts);
+  const total = values.reduce((a, b) => a + b, 0);
+  const COLORS = ["#b88278", "#d2ae90", "#8ca5bb", "#98b4a1", "#c5abc1"];
+
+  return (
+    <div style={{ background: "var(--ink-2)", border: "1px solid var(--border)", borderRadius: 10, padding: 18, boxShadow: "var(--shadow-soft)" }}>
+      <p style={{ fontSize: 10, letterSpacing: "0.1em", textTransform: "uppercase", color: "var(--text-muted)", marginBottom: 14 }}>Job type mix</p>
+      <div style={{ position: "relative", width: "100%", height: 140 }}>
+        {total > 0 ? (
+          <Doughnut
+            data={{
+              labels,
+              datasets: [{
+                data: values,
+                backgroundColor: COLORS.slice(0, labels.length),
+                borderWidth: 0,
+                hoverOffset: 4,
+              }],
+            }}
+            options={{
+              responsive: true,
+              maintainAspectRatio: false,
+              cutout: "70%",
+              plugins: {
+                legend: { display: false },
+                tooltip: {
+                  callbacks: {
+                    label: (context) => ` ${context.label}: ${context.parsed}`,
+                  },
+                },
+              },
+            }}
+          />
+        ) : (
+          <div style={{ height: "100%", borderRadius: "50%", border: "10px solid var(--panel-line)" }} />
+        )}
+        <div style={{ position: "absolute", top: "50%", left: "50%", transform: "translate(-50%,-50%)", textAlign: "center", pointerEvents: "none" }}>
+          <div style={{ fontSize: 22, color: "var(--text-primary)" }}>{total}</div>
+          <div style={{ fontSize: 10, color: "var(--text-muted)" }}>total</div>
+        </div>
+      </div>
+      <div style={{ display: "flex", flexDirection: "column", gap: 7, marginTop: 12 }}>
+        {labels.length ? labels.map((label, i) => (
+          <div key={label} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", fontSize: 11 }}>
+            <span style={{ display: "flex", alignItems: "center", gap: 7, color: "var(--text-secondary)" }}>
+              <span style={{ width: 8, height: 8, borderRadius: 2, background: COLORS[i], flexShrink: 0, display: "inline-block" }} />
+              {label}
+            </span>
+            <span style={{ color: "var(--text-muted)" }}>{Math.round((values[i] / total) * 100)}%</span>
+          </div>
+        )) : (
+          <span style={{ color: "var(--text-muted)", fontSize: 11 }}>No applications logged yet.</span>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function WeeklyActivityChart({ jobs }: { jobs: { applied_at: string }[] }) {
+  const days = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+  const counts = new Array(7).fill(0);
+  jobs.forEach((job) => {
+    const d = new Date(job.applied_at);
+    if (!Number.isNaN(d.getTime())) counts[d.getDay()]++;
+  });
+  const max = Math.max(...counts, 1);
+
+  return (
+    <div style={{ background: "var(--ink-2)", border: "1px solid var(--border)", borderRadius: 10, padding: 18, boxShadow: "var(--shadow-soft)" }}>
+      <p style={{ fontSize: 10, letterSpacing: "0.1em", textTransform: "uppercase", color: "var(--text-muted)", marginBottom: 14 }}>Weekly activity</p>
+      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+        {days.map((day, i) => (
+          <div key={day} style={{ display: "flex", flexDirection: "column", gap: 3 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, color: "var(--text-secondary)" }}>
+              <span>{day}</span><span>{counts[i]}</span>
+            </div>
+            <div style={{ background: "var(--panel-line)", borderRadius: 3, height: 5, width: "100%" }}>
+              <div style={{ borderRadius: 3, height: 5, width: `${Math.round((counts[i] / max) * 100)}%`, background: "var(--gold)" }} />
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
 
 export default function DashboardClient({
   authLevel,
@@ -148,6 +277,7 @@ export default function DashboardClient({
     authLevel === "error" ? authMessage : null,
   );
   const [emails, setEmails] = useState<EmailMessage[]>([]);
+  const [statusUpdates, setStatusUpdates] = useState<StatusNotification[]>([]);
   const [isPending, startTransition] = useTransition();
 
   const loadDashboard = async () => {
@@ -218,7 +348,13 @@ export default function DashboardClient({
     const payload = (await response.json()) as {
       ok: boolean;
       message: string;
-      data?: EmailMessage[];
+      data?: {
+        emails: EmailMessage[];
+        status_updates: StatusNotification[];
+        matched_count: number;
+        updated_count: number;
+        unmatched_count: number;
+      };
     };
 
     if (!response.ok || !payload.ok || !payload.data) {
@@ -227,7 +363,8 @@ export default function DashboardClient({
     }
 
     setMessage(payload.message);
-    setEmails(payload.data);
+    setEmails(payload.data.emails);
+    setStatusUpdates(payload.data.status_updates);
     await loadDashboard();
   }
 
@@ -327,6 +464,33 @@ export default function DashboardClient({
   }
 
   const appliedJobs = data?.jobs.filter((job) => job.applied) ?? [];
+  const sortedAppliedJobs = [...appliedJobs].sort((left, right) => {
+    const leftDate = left.application?.applied_at || left.posted_at || "";
+    const rightDate = right.application?.applied_at || right.posted_at || "";
+    return rightDate.localeCompare(leftDate);
+  });
+  const recentJobs = sortedAppliedJobs.map((job) => ({
+    title: job.title,
+    company: job.company,
+    location: job.location,
+    applied_at: job.application?.applied_at ?? job.posted_at ?? "",
+  }));
+  const recentStatusNotifications = data?.status_notifications ?? [];
+  const actionableStatuses = new Set([
+    "In Review",
+    "Recruiter Screen",
+    "Assessment",
+    "Interview",
+    "Final Round",
+    "Offer",
+    "Rejected",
+  ]);
+  const latestNotificationByJob = new Map<number, StatusNotification>(
+    recentStatusNotifications.map((item) => [item.job_id, item]),
+  );
+  const actionableJobs = sortedAppliedJobs.filter((job) =>
+    actionableStatuses.has(job.application?.status ?? ""),
+  );
 
   const styles = `
     @import url('https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400;0,500;0,600;1,400&family=DM+Sans:wght@300;400;500&family=DM+Mono:wght@400;500&display=swap');
@@ -334,21 +498,23 @@ export default function DashboardClient({
     * { box-sizing: border-box; margin: 0; padding: 0; }
 
     :root {
-      --ink: #0d0d0f;
-      --ink-2: #1a1a1f;
-      --ink-3: #252530;
-      --border: rgba(255,255,255,0.07);
-      --border-light: rgba(255,255,255,0.12);
-      --gold: #c8a96e;
-      --gold-dim: rgba(200,169,110,0.15);
-      --gold-glow: rgba(200,169,110,0.08);
-      --text-primary: #f0ede8;
-      --text-secondary: #9090a0;
-      --text-muted: #5a5a6e;
-      --success: #4ecca3;
-      --success-dim: rgba(78,204,163,0.12);
-      --danger: #e07070;
-      --danger-dim: rgba(224,112,112,0.12);
+      --ink: #f7efea;
+      --ink-2: #fff9f6;
+      --ink-3: #f3e7e1;
+      --border: rgba(122, 87, 84, 0.12);
+      --border-light: rgba(122, 87, 84, 0.22);
+      --gold: #b88278;
+      --gold-dim: rgba(184, 130, 120, 0.14);
+      --gold-glow: rgba(184, 130, 120, 0.08);
+      --text-primary: #402d2d;
+      --text-secondary: #72585a;
+      --text-muted: #9b7f82;
+      --success: #2f8a72;
+      --success-dim: rgba(47, 138, 114, 0.12);
+      --danger: #b15f6b;
+      --danger-dim: rgba(177, 95, 107, 0.12);
+      --panel-line: rgba(184, 130, 120, 0.12);
+      --shadow-soft: 0 18px 45px rgba(116, 74, 77, 0.08);
       --radius: 16px;
       --radius-sm: 10px;
       --radius-full: 999px;
@@ -365,8 +531,8 @@ export default function DashboardClient({
     .dashboard {
       min-height: 100vh;
       background:
-        radial-gradient(ellipse 60% 40% at 80% 10%, rgba(200,169,110,0.04) 0%, transparent 60%),
-        radial-gradient(ellipse 50% 60% at 10% 80%, rgba(78,204,163,0.03) 0%, transparent 60%),
+        radial-gradient(ellipse 60% 40% at 80% 10%, rgba(184,130,120,0.10) 0%, transparent 62%),
+        radial-gradient(ellipse 50% 60% at 10% 80%, rgba(209,170,157,0.10) 0%, transparent 62%),
         var(--ink);
       padding: 0;
     }
@@ -379,8 +545,9 @@ export default function DashboardClient({
 
     .sidebar {
       width: 72px;
-      background: var(--ink-2);
+      background: rgba(255, 249, 246, 0.92);
       border-right: 1px solid var(--border);
+      box-shadow: 4px 0 24px rgba(116, 74, 77, 0.05);
       display: flex;
       flex-direction: column;
       align-items: center;
@@ -406,6 +573,7 @@ export default function DashboardClient({
       font-size: 18px;
       color: var(--ink);
       font-weight: 600;
+      box-shadow: 0 12px 26px rgba(184, 130, 120, 0.18);
     }
 
     .nav-btn {
@@ -425,7 +593,7 @@ export default function DashboardClient({
     }
 
     .nav-btn:hover {
-      background: var(--ink-3);
+      background: rgba(184, 130, 120, 0.10);
       color: var(--text-primary);
       border-color: var(--border-light);
     }
@@ -433,13 +601,13 @@ export default function DashboardClient({
     .nav-btn.active {
       background: var(--gold-dim);
       color: var(--gold);
-      border-color: rgba(200,169,110,0.3);
+      border-color: rgba(184,130,120,0.28);
     }
 
     .nav-tooltip {
       position: absolute;
       left: calc(100% + 12px);
-      background: var(--ink-3);
+      background: var(--ink-2);
       border: 1px solid var(--border-light);
       color: var(--text-primary);
       font-size: 12px;
@@ -461,13 +629,14 @@ export default function DashboardClient({
     .main {
       margin-left: 72px;
       flex: 1;
-      padding: 40px 48px;
-      max-width: 1360px;
+      min-width: 0;
+      padding: 28px clamp(18px, 2.4vw, 40px) 40px;
     }
 
     /* ── Header ── */
     .header {
-      margin-bottom: 48px;
+      margin-bottom: 52px;
+      max-width: 960px;
     }
 
     .header-eyebrow {
@@ -498,7 +667,7 @@ export default function DashboardClient({
       font-size: 15px;
       color: var(--text-secondary);
       line-height: 1.7;
-      max-width: 560px;
+      max-width: 680px;
       font-weight: 300;
     }
 
@@ -529,9 +698,13 @@ export default function DashboardClient({
     /* ── Stat Cards ── */
     .stats-row {
       display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
-      gap: 16px;
+      grid-template-columns: repeat(3, minmax(220px, 1fr));
+      gap: 18px;
       margin-bottom: 40px;
+    }
+
+    @media (max-width: 980px) {
+      .stats-row { grid-template-columns: 1fr; }
     }
 
     .stat-card {
@@ -542,6 +715,7 @@ export default function DashboardClient({
       position: relative;
       overflow: hidden;
       transition: border-color 0.2s ease;
+      box-shadow: var(--shadow-soft);
     }
 
     .stat-card::before {
@@ -583,8 +757,9 @@ export default function DashboardClient({
     /* ── Action Cards (Home) ── */
     .action-grid {
       display: grid;
-      grid-template-columns: 1.4fr 1fr;
-      gap: 20px;
+      grid-template-columns: minmax(0, 1.55fr) minmax(360px, 1fr);
+      align-items: stretch;
+      gap: 22px;
       margin-bottom: 40px;
     }
 
@@ -598,6 +773,8 @@ export default function DashboardClient({
       border-radius: var(--radius);
       padding: 28px;
       transition: border-color 0.2s ease;
+      min-width: 0;
+      box-shadow: var(--shadow-soft);
     }
 
     .card:hover { border-color: var(--border-light); }
@@ -634,7 +811,7 @@ export default function DashboardClient({
       gap: 8px;
       padding: 12px 24px;
       background: var(--gold);
-      color: var(--ink);
+      color: #fff9f6;
       border: none;
       border-radius: var(--radius-full);
       font-family: 'DM Sans', sans-serif;
@@ -646,9 +823,9 @@ export default function DashboardClient({
     }
 
     .btn-primary:hover {
-      background: #d4b87a;
+      background: #a96f67;
       transform: translateY(-1px);
-      box-shadow: 0 8px 24px rgba(200,169,110,0.25);
+      box-shadow: 0 8px 24px rgba(184,130,120,0.22);
     }
 
     .btn-primary:disabled {
@@ -676,9 +853,9 @@ export default function DashboardClient({
     }
 
     .btn-ghost:hover {
-      background: var(--ink-3);
+      background: rgba(184, 130, 120, 0.10);
       color: var(--text-primary);
-      border-color: rgba(255,255,255,0.2);
+      border-color: var(--border-light);
     }
 
     .btn-dark {
@@ -686,7 +863,7 @@ export default function DashboardClient({
       align-items: center;
       gap: 8px;
       padding: 10px 18px;
-      background: var(--ink-3);
+      background: #fcf5f1;
       color: var(--text-primary);
       border: 1px solid var(--border-light);
       border-radius: var(--radius-full);
@@ -699,8 +876,8 @@ export default function DashboardClient({
     }
 
     .btn-dark:hover {
-      background: #2e2e3a;
-      border-color: rgba(255,255,255,0.2);
+      background: #f5e8e2;
+      border-color: rgba(184,130,120,0.28);
     }
 
     .btn-row {
@@ -768,7 +945,7 @@ export default function DashboardClient({
 
     .field-input:focus,
     .field-textarea:focus {
-      border-color: rgba(200,169,110,0.4);
+      border-color: rgba(184,130,120,0.45);
     }
 
     .field-textarea {
@@ -789,8 +966,9 @@ export default function DashboardClient({
     /* ── 2-col tracker layout ── */
     .tracker-grid {
       display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: 20px;
+      grid-template-columns: minmax(360px, 0.92fr) minmax(540px, 1.18fr);
+      align-items: start;
+      gap: 22px;
     }
 
     @media (max-width: 1100px) {
@@ -819,6 +997,21 @@ export default function DashboardClient({
     .job-list {
       display: grid;
       gap: 10px;
+    }
+
+    .job-list.scrollable {
+      max-height: 560px;
+      overflow-y: auto;
+      padding-right: 6px;
+    }
+
+    .job-list.scrollable::-webkit-scrollbar {
+      width: 8px;
+    }
+
+    .job-list.scrollable::-webkit-scrollbar-thumb {
+      background: rgba(184,130,120,0.26);
+      border-radius: 999px;
     }
 
     .job-title {
@@ -863,7 +1056,7 @@ export default function DashboardClient({
     .badge-gold {
       background: var(--gold-dim);
       color: var(--gold);
-      border: 1px solid rgba(200,169,110,0.25);
+      border: 1px solid rgba(184,130,120,0.24);
     }
 
     .badge-success {
@@ -878,7 +1071,7 @@ export default function DashboardClient({
       flex-direction: column;
       align-items: center;
       justify-content: center;
-      min-height: 280px;
+      min-height: 360px;
       text-align: center;
       gap: 12px;
     }
@@ -931,7 +1124,7 @@ export default function DashboardClient({
     .skill-tag {
       padding: 5px 12px;
       background: var(--gold-glow);
-      border: 1px solid rgba(200,169,110,0.18);
+      border: 1px solid rgba(184,130,120,0.18);
       border-radius: var(--radius-full);
       font-size: 12px;
       color: var(--gold);
@@ -954,13 +1147,13 @@ export default function DashboardClient({
     }
 
     .code-block {
-      background: #0a0a0d;
+      background: #fbf4ef;
       border: 1px solid var(--border);
       border-radius: var(--radius-sm);
       padding: 20px;
       font-family: 'DM Mono', monospace;
       font-size: 12.5px;
-      color: #c8c8d8;
+      color: #5e494b;
       line-height: 1.8;
       white-space: pre-wrap;
       overflow-x: auto;
@@ -1023,7 +1216,7 @@ export default function DashboardClient({
       transition: border-color 0.15s ease;
     }
 
-    .keyword-chip:hover { border-color: rgba(200,169,110,0.3); }
+    .keyword-chip:hover { border-color: rgba(184,130,120,0.26); }
 
     .keyword-chip strong {
       font-size: 13px;
@@ -1073,9 +1266,10 @@ export default function DashboardClient({
       border: 1px solid var(--border);
       border-radius: var(--radius-sm);
       transition: border-color 0.15s ease;
+      min-height: 92px;
     }
 
-    .recent-card:hover { border-color: rgba(200,169,110,0.25); }
+    .recent-card:hover { border-color: rgba(184,130,120,0.24); }
 
     .recent-card strong {
       font-size: 14px;
@@ -1119,7 +1313,7 @@ export default function DashboardClient({
     .profile-block {
       padding: 16px 18px;
       background: var(--gold-glow);
-      border: 1px solid rgba(200,169,110,0.2);
+      border: 1px solid rgba(184,130,120,0.2);
       border-radius: var(--radius-sm);
       margin-bottom: 16px;
     }
@@ -1302,7 +1496,7 @@ export default function DashboardClient({
                 </p>
               </header>
 
-              <div className="stats-row">
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 10, padding: "0 28px 16px" }}>
                 <div className="stat-card">
                   <p className="stat-label">Applied YTD</p>
                   <p className="stat-value">{data?.tracker_stats.applied_ytd ?? 0}</p>
@@ -1325,7 +1519,26 @@ export default function DashboardClient({
                 </div>
               </div>
 
-              <div className="action-grid">
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0,1fr))", gap: 10, padding: "0 28px 16px" }}>
+                <JobTypePieChart jobs={recentJobs} />
+                <WeeklyActivityChart jobs={recentJobs} />
+                <div style={{ background: "var(--ink-2)", border: "1px solid var(--border)", borderRadius: 10, padding: 18, boxShadow: "var(--shadow-soft)" }}>
+                  <p style={{ fontSize: 10, letterSpacing: "0.1em", textTransform: "uppercase", color: "var(--text-muted)", marginBottom: 14 }}>Recently applied</p>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                    {recentJobs.slice(0, 4).map((job, i) => (
+                      <div key={`${job.title}-${job.company}-${i}`} style={{ background: "var(--ink-3)", borderRadius: 8, padding: "10px 14px", border: "1px solid var(--border)" }}>
+                        <div style={{ fontSize: 13, color: "var(--text-primary)", fontWeight: 500 }}>{job.title}</div>
+                        <div style={{ fontSize: 11, color: "var(--text-secondary)", marginTop: 2 }}>{job.company}{job.location ? ` · ${job.location}` : ""}</div>
+                      </div>
+                    ))}
+                    {!recentJobs.length && (
+                      <p className="empty-state">No tracked applications yet.</p>
+                    )}
+                  </div>
+                </div>
+              </div>
+
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20, padding: "0 28px 16px" }}>
                 <div className="card">
                   <p className="card-eyebrow">Primary Workflow</p>
                   <h2 className="card-title">Log a job you applied to</h2>
@@ -1339,32 +1552,122 @@ export default function DashboardClient({
                   </div>
                 </div>
 
+                <div className="card" style={{ background: "#fbf2ed" }}>
+                  <p className="card-eyebrow">Legacy Workspace</p>
+                  <h2 className="card-title" style={{ color: "var(--text-secondary)" }}>ATS Tools</h2>
+                  <p className="card-body">
+                    ATS keyword parser, seeded job matcher, and Gmail monitor
+                  </p>
+                  <div className="btn-row">
+                    <button className="btn-ghost" onClick={() => setMode("job-search")}>
+                      Open Job Search {iconArrow}
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              <div style={{ display: "grid", gridTemplateColumns: "1.2fr 0.8fr", gap: 20, padding: "0 28px 16px" }}>
                 <div className="card">
-                  <p className="card-eyebrow">Recently Applied</p>
-                  <div style={{ display: "grid", gap: 10, marginTop: 12 }}>
-                    {appliedJobs.slice(0, 4).map((job) => (
-                      <div className="recent-card" key={job.id}>
-                        <strong>{job.title}</strong>
-                        <p>{job.company} · {job.location}</p>
-                      </div>
-                    ))}
-                    {!appliedJobs.length && (
-                      <p className="empty-state">No tracked applications yet.</p>
+                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 16, marginBottom: 12 }}>
+                    <p className="card-eyebrow" style={{ marginBottom: 0 }}>Recent Status Updates</p>
+                    {data?.gmail_connection ? (
+                      <button
+                        className="btn-ghost"
+                        onClick={() => startTransition(() => { void handleCheckGmail(); })}
+                      >
+                        {iconMail} Check Gmail Now
+                      </button>
+                    ) : (
+                      <a href={`${API_BASE}/gmail/connect`} className="btn-ghost">
+                        Connect Gmail {iconArrow}
+                      </a>
+                    )}
+                  </div>
+                  <div style={{ display: "grid", gap: 10 }}>
+                    {recentStatusNotifications.length > 0 ? (
+                      recentStatusNotifications.map((update) => (
+                        <div
+                          key={`${update.id}-${update.job_id}`}
+                          style={{
+                            background: "var(--ink-3)",
+                            borderRadius: 8,
+                            padding: "12px 14px",
+                            border: "1px solid var(--border)",
+                            display: "grid",
+                            gap: 5,
+                          }}
+                        >
+                          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
+                            <div style={{ fontSize: 13, color: "var(--text-primary)", fontWeight: 500 }}>
+                              {update.title} · {update.company}
+                            </div>
+                            <div style={{ fontSize: 11, color: "var(--gold)" }}>
+                              {update.old_status} → {update.new_status}
+                            </div>
+                          </div>
+                          <div style={{ fontSize: 11, color: "var(--text-secondary)" }}>
+                            {update.email_snippet || update.email_subject}
+                          </div>
+                          <div style={{ fontSize: 10, color: "var(--text-muted)" }}>
+                            {update.observed_at}
+                          </div>
+                        </div>
+                      ))
+                    ) : (
+                      <p className="empty-state">No Gmail-driven status changes yet.</p>
+                    )}
+                  </div>
+                </div>
+
+                <div className="card">
+                  <p className="card-eyebrow">Action Needed</p>
+                  <div style={{ display: "grid", gap: 10 }}>
+                    {actionableJobs.length > 0 ? (
+                      actionableJobs.slice(0, 6).map((job) => {
+                        const notification = latestNotificationByJob.get(job.id);
+                        return (
+                          <div
+                            key={job.id}
+                            style={{
+                              background: "var(--ink-3)",
+                              borderRadius: 8,
+                              padding: "12px 14px",
+                              border: "1px solid var(--border)",
+                              display: "grid",
+                              gap: 6,
+                            }}
+                          >
+                            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
+                              <div style={{ fontSize: 13, color: "var(--text-primary)", fontWeight: 500 }}>
+                                {job.title}
+                              </div>
+                              <div style={{ fontSize: 11, color: "var(--gold)" }}>
+                                {job.application?.status}
+                              </div>
+                            </div>
+                            <div style={{ fontSize: 11, color: "var(--text-secondary)" }}>
+                              {job.company}{job.location ? ` · ${job.location}` : ""}
+                            </div>
+                            <div style={{ fontSize: 11, color: "var(--text-muted)" }}>
+                              {notification?.email_snippet || notification?.email_subject || "Review the latest employer message for next steps."}
+                            </div>
+                            <div>
+                              <a href={job.job_url} target="_blank" rel="noreferrer" className="btn-ghost">
+                                Open Job {iconArrow}
+                              </a>
+                            </div>
+                          </div>
+                        );
+                      })
+                    ) : (
+                      <p className="empty-state">No active follow-up statuses right now.</p>
                     )}
                   </div>
                 </div>
               </div>
 
-              <div className="card" style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 24, padding: "20px 28px" }}>
-                <div>
-                  <p className="card-eyebrow">Legacy Workspace</p>
-                  <p style={{ fontSize: 14, color: "var(--text-secondary)", marginTop: 4 }}>
-                    ATS keyword parser, seeded job matcher, and Gmail monitor
-                  </p>
-                </div>
-                <button className="btn-ghost" onClick={() => setMode("job-search")}>
-                  Open Job Search {iconArrow}
-                </button>
+              <div style={{ padding: "0 28px 20px", fontSize: 10, color: "var(--text-muted)", letterSpacing: "0.05em", textAlign: "center" }}>
+                CAREER COMMAND CENTER · v2
               </div>
             </div>
           )}
@@ -1445,7 +1748,7 @@ export default function DashboardClient({
                           padding: 16,
                           borderRadius: 14,
                           border: "1px solid var(--border-light)",
-                          background: "rgba(255,255,255,0.02)",
+                          background: "var(--gold-glow)",
                           display: "grid",
                           gap: 14,
                         }}
@@ -1462,13 +1765,13 @@ export default function DashboardClient({
                               fontSize: 11,
                               textTransform: "uppercase",
                               letterSpacing: "0.08em",
-                              color: trackerPreview.confidence_level === "high" ? "#0d0d0f" : "var(--text-primary)",
+                              color: trackerPreview.confidence_level === "high" ? "#fff9f6" : "var(--text-primary)",
                               background:
                                 trackerPreview.confidence_level === "high"
                                   ? "var(--gold)"
                                   : trackerPreview.confidence_level === "medium"
-                                    ? "rgba(200,169,110,0.18)"
-                                    : "rgba(224,112,112,0.16)",
+                                    ? "rgba(184,130,120,0.18)"
+                                    : "rgba(177,95,107,0.14)",
                               border: "1px solid var(--border-light)",
                             }}
                           >
@@ -1480,14 +1783,14 @@ export default function DashboardClient({
                           <div
                             style={{
                               borderRadius: 12,
-                              border: "1px solid rgba(224,112,112,0.25)",
-                              background: "rgba(224,112,112,0.08)",
+                              border: "1px solid rgba(177,95,107,0.24)",
+                              background: "rgba(177,95,107,0.08)",
                               padding: 12,
                               display: "grid",
                               gap: 8,
                             }}
                           >
-                            <p className="field-label" style={{ marginBottom: 0, color: "#f3c1c1" }}>
+                            <p className="field-label" style={{ marginBottom: 0, color: "var(--danger)" }}>
                               Review Needed
                             </p>
                             <div className="alignment-list">
@@ -1656,8 +1959,8 @@ export default function DashboardClient({
                 {/* Applied jobs table */}
                 <div className="card col-span-2">
                   <p className="card-eyebrow" style={{ marginBottom: 16 }}>All Applied Jobs</p>
-                  <div className="job-list">
-                    {appliedJobs.map((job) => (
+                  <div className="job-list scrollable">
+                    {sortedAppliedJobs.map((job) => (
                       <div className="job-row" key={job.id}>
                         <div style={{ flex: 1 }}>
                           <p className="job-title">{job.title}</p>
@@ -1677,7 +1980,7 @@ export default function DashboardClient({
                         </a>
                       </div>
                     ))}
-                    {!appliedJobs.length && (
+                    {!sortedAppliedJobs.length && (
                       <p className="empty-state">No applied jobs tracked yet.</p>
                     )}
                   </div>
@@ -1795,6 +2098,18 @@ export default function DashboardClient({
                       >
                         {iconMail} Check Gmail Now
                       </button>
+                      {statusUpdates.length > 0 && (
+                        <div style={{ marginTop: 16, display: "grid", gap: 8 }}>
+                          <p className="field-label" style={{ marginBottom: 0 }}>Latest status changes</p>
+                          <div className="alignment-list">
+                            {statusUpdates.map((update) => (
+                              <div className="alignment-item" key={`${update.id}-${update.job_id}`}>
+                                {update.title}: {update.old_status} → {update.new_status}
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
                       {emails.length > 0 && (
                         <div style={{ display: "grid", gap: 10, marginTop: 20 }}>
                           {emails.map((email) => (

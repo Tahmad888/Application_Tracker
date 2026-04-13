@@ -232,6 +232,126 @@ def fetch_gmail_connection() -> dict[str, Any] | None:
     return dict(connection) if connection else None
 
 
+def fetch_tracked_jobs_for_status_matching() -> list[dict[str, Any]]:
+    db = get_db()
+    rows = db.execute(
+        """
+        SELECT
+            jobs.id,
+            jobs.title,
+            jobs.company,
+            jobs.location,
+            jobs.job_url,
+            jobs.posted_at,
+            applications.applied_at,
+            applications.status,
+            applications.notes
+        FROM jobs
+        JOIN applications ON applications.job_id = jobs.id
+        WHERE jobs.applied = 1
+        ORDER BY applications.applied_at DESC
+        """
+    ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def apply_gmail_status_update(
+    *,
+    job_id: int,
+    old_status: str,
+    new_status: str,
+    email_id: str,
+    email_subject: str,
+    matched_from: str,
+    email_snippet: str,
+) -> dict[str, Any]:
+    db = get_db()
+    db.execute(
+        """
+        UPDATE applications
+        SET status = ?
+        WHERE job_id = ?
+        """,
+        (new_status, job_id),
+    )
+    db.execute(
+        """
+        INSERT OR IGNORE INTO application_status_events (
+            job_id, old_status, new_status, source, email_id, email_subject,
+            matched_from, email_snippet, observed_at, is_seen
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
+        """,
+        (
+            job_id,
+            old_status,
+            new_status,
+            "gmail",
+            email_id,
+            email_subject,
+            matched_from,
+            email_snippet,
+            utc_now(),
+        ),
+    )
+    db.commit()
+    row = db.execute(
+        """
+        SELECT
+            application_status_events.id,
+            application_status_events.job_id,
+            application_status_events.old_status,
+            application_status_events.new_status,
+            application_status_events.source,
+            application_status_events.email_id,
+            application_status_events.email_subject,
+            application_status_events.matched_from,
+            application_status_events.email_snippet,
+            application_status_events.observed_at,
+            application_status_events.is_seen,
+            jobs.title,
+            jobs.company
+        FROM application_status_events
+        JOIN jobs ON jobs.id = application_status_events.job_id
+        WHERE application_status_events.job_id = ?
+          AND application_status_events.email_id = ?
+          AND application_status_events.new_status = ?
+        ORDER BY application_status_events.id DESC
+        LIMIT 1
+        """,
+        (job_id, email_id, new_status),
+    ).fetchone()
+    return dict(row) if row else {}
+
+
+def fetch_status_notifications(limit: int = 6) -> list[dict[str, Any]]:
+    db = get_db()
+    rows = db.execute(
+        """
+        SELECT
+            application_status_events.id,
+            application_status_events.job_id,
+            application_status_events.old_status,
+            application_status_events.new_status,
+            application_status_events.source,
+            application_status_events.email_id,
+            application_status_events.email_subject,
+            application_status_events.matched_from,
+            application_status_events.email_snippet,
+            application_status_events.observed_at,
+            application_status_events.is_seen,
+            jobs.title,
+            jobs.company
+        FROM application_status_events
+        JOIN jobs ON jobs.id = application_status_events.job_id
+        ORDER BY application_status_events.observed_at DESC
+        LIMIT ?
+        """,
+        (limit,),
+    ).fetchall()
+    return [dict(row) for row in rows]
+
+
 def fetch_dashboard_data() -> dict[str, Any]:
     db = get_db()
     latest_resume = db.execute(
@@ -284,7 +404,7 @@ def fetch_dashboard_data() -> dict[str, Any]:
 
     applications = db.execute(
         """
-        SELECT applications.job_id, applications.applied_at, applications.status
+        SELECT applications.job_id, applications.applied_at, applications.status, applications.notes
         FROM applications
         """
     ).fetchall()
@@ -339,6 +459,7 @@ def fetch_dashboard_data() -> dict[str, Any]:
         "jobs": hydrated_jobs,
         "tracker_stats": tracker_stats,
         "gmail_connection": fetch_gmail_connection(),
+        "status_notifications": fetch_status_notifications(),
     }
 
 

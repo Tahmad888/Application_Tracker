@@ -8,6 +8,7 @@ from .gmail_oauth import (
     GmailOAuthError,
     list_recent_job_emails,
 )
+from .gmail_matching import match_email_to_job, should_advance_status
 from .google_sheets import SheetsConfigError, SheetsSyncError, sync_application
 from .job_tracker import (
     JobTrackerError,
@@ -22,7 +23,9 @@ from .repository import (
     fetch_dashboard_data,
     fetch_gmail_connection,
     fetch_job,
+    fetch_tracked_jobs_for_status_matching,
     mark_job_applied,
+    apply_gmail_status_update,
     record_sync_event,
     replace_keywords,
     save_resume,
@@ -137,11 +140,84 @@ def gmail_check():
     except (GmailOAuthConfigError, GmailOAuthError) as exc:
         return jsonify({"ok": False, "message": f"Gmail check failed: {exc}"}), 400
 
+    tracked_jobs = fetch_tracked_jobs_for_status_matching()
+    status_updates: list[dict] = []
+    matched_count = 0
+    unmatched_count = 0
+    synced_job_ids: set[int] = set()
+
+    for message in messages:
+        proposal = match_email_to_job(message, tracked_jobs)
+        if not proposal:
+            unmatched_count += 1
+            continue
+
+        matched_count += 1
+        current_job = next((job for job in tracked_jobs if int(job["id"]) == proposal.job_id), None)
+        if not current_job:
+            unmatched_count += 1
+            continue
+
+        if proposal.job_id not in synced_job_ids:
+            matched_job = fetch_job(proposal.job_id)
+            if matched_job:
+                try:
+                    sheet_title = sync_application(matched_job)
+                except SheetsConfigError as exc:
+                    record_sync_event("google_sheets", proposal.job_id, "config_error", str(exc))
+                except SheetsSyncError as exc:
+                    record_sync_event("google_sheets", proposal.job_id, "sync_error", str(exc))
+                else:
+                    record_sync_event("google_sheets", proposal.job_id, "success", f"Synced to {sheet_title}.")
+                synced_job_ids.add(proposal.job_id)
+
+        old_status = str(current_job.get("status") or "Applied")
+        if not should_advance_status(old_status, proposal.new_status):
+            continue
+
+        event = apply_gmail_status_update(
+            job_id=proposal.job_id,
+            old_status=old_status,
+            new_status=proposal.new_status,
+            email_id=proposal.email_id,
+            email_subject=proposal.email_subject,
+            matched_from=proposal.matched_from,
+            email_snippet=proposal.email_snippet,
+        )
+        if not event:
+            continue
+
+        updated_job = fetch_job(proposal.job_id)
+        if updated_job:
+            try:
+                sheet_title = sync_application(updated_job)
+            except SheetsConfigError as exc:
+                record_sync_event("google_sheets", proposal.job_id, "config_error", str(exc))
+            except SheetsSyncError as exc:
+                record_sync_event("google_sheets", proposal.job_id, "sync_error", str(exc))
+            else:
+                record_sync_event("google_sheets", proposal.job_id, "success", f"Synced to {sheet_title}.")
+
+        current_job["status"] = proposal.new_status
+        status_updates.append(event)
+
+    updated_count = len(status_updates)
+    message = (
+        f"Checked {len(messages)} Gmail message(s). "
+        f"Matched {matched_count}, updated {updated_count}, unmatched {unmatched_count}."
+    )
+
     return jsonify(
         {
             "ok": True,
-            "message": f"Found {len(messages)} recent job-related message(s).",
-            "data": messages,
+            "message": message,
+            "data": {
+                "emails": messages,
+                "status_updates": status_updates,
+                "matched_count": matched_count,
+                "updated_count": updated_count,
+                "unmatched_count": unmatched_count,
+            },
         }
     )
 

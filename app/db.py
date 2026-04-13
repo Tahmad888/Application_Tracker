@@ -84,6 +84,22 @@ CREATE TABLE IF NOT EXISTS gmail_connections (
     connected_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS application_status_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    job_id INTEGER NOT NULL,
+    old_status TEXT NOT NULL,
+    new_status TEXT NOT NULL,
+    source TEXT NOT NULL,
+    email_id TEXT NOT NULL DEFAULT '',
+    email_subject TEXT NOT NULL DEFAULT '',
+    matched_from TEXT NOT NULL DEFAULT '',
+    email_snippet TEXT NOT NULL DEFAULT '',
+    observed_at TEXT NOT NULL,
+    is_seen INTEGER NOT NULL DEFAULT 0,
+    UNIQUE(job_id, email_id, new_status),
+    FOREIGN KEY (job_id) REFERENCES jobs (id)
+);
 """
 
 

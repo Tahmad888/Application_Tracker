@@ -143,7 +143,7 @@ def hydrate_credentials(connection: dict[str, Any]):
     )
 
 
-def list_recent_job_emails(connection: dict[str, Any], max_results: int = 10) -> list[dict[str, str]]:
+def list_recent_job_emails(connection: dict[str, Any], max_results: int = 50) -> list[dict[str, str]]:
     credentials = hydrate_credentials(connection)
     service = build_gmail_service(credentials)
     response = (
@@ -152,7 +152,7 @@ def list_recent_job_emails(connection: dict[str, Any], max_results: int = 10) ->
         .list(
             userId="me",
             maxResults=max_results,
-            q='newer_than:30d (interview OR recruiter OR application OR rejected OR "next steps" OR assessment)',
+            q='newer_than:30d (interview OR recruiter OR application OR rejected OR "next steps" OR assessment OR offer OR congratulations OR "thank you for applying" OR "phone screen")',
         )
         .execute()
     )
