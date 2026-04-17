@@ -169,10 +169,10 @@ function JobTypePieChart({ jobs }: { jobs: { title: string }[] }) {
   const labels = Object.keys(counts);
   const values = Object.values(counts);
   const total = values.reduce((a, b) => a + b, 0);
-  const COLORS = ["#b88278", "#d2ae90", "#8ca5bb", "#98b4a1", "#c5abc1"];
+  const COLORS = ["#3D6B5E", "#6A9E92", "#A8C4BE", "#D4E4E1"];
 
   return (
-    <div style={{ background: "var(--ink-2)", border: "1px solid var(--border)", borderRadius: 10, padding: 18, boxShadow: "var(--shadow-soft)" }}>
+    <div style={{ background: "var(--ink-2)", border: "0.5px solid var(--border)", borderRadius: 10, padding: "1rem 1.25rem", boxShadow: "none" }}>
       <p style={{ fontSize: 10, letterSpacing: "0.1em", textTransform: "uppercase", color: "var(--text-muted)", marginBottom: 14 }}>Job type mix</p>
       <div style={{ position: "relative", width: "100%", height: 140 }}>
         {total > 0 ? (
@@ -235,7 +235,7 @@ function WeeklyActivityChart({ jobs }: { jobs: { applied_at: string }[] }) {
   const max = Math.max(...counts, 1);
 
   return (
-    <div style={{ background: "var(--ink-2)", border: "1px solid var(--border)", borderRadius: 10, padding: 18, boxShadow: "var(--shadow-soft)" }}>
+    <div style={{ background: "var(--ink-2)", border: "0.5px solid var(--border)", borderRadius: 10, padding: "1rem 1.25rem", boxShadow: "none" }}>
       <p style={{ fontSize: 10, letterSpacing: "0.1em", textTransform: "uppercase", color: "var(--text-muted)", marginBottom: 14 }}>Weekly activity</p>
       <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
         {days.map((day, i) => (
@@ -498,42 +498,39 @@ export default function DashboardClient({
     * { box-sizing: border-box; margin: 0; padding: 0; }
 
     :root {
-      --ink: #f7efea;
-      --ink-2: #fff9f6;
-      --ink-3: #f3e7e1;
-      --border: rgba(122, 87, 84, 0.12);
-      --border-light: rgba(122, 87, 84, 0.22);
-      --gold: #b88278;
-      --gold-dim: rgba(184, 130, 120, 0.14);
-      --gold-glow: rgba(184, 130, 120, 0.08);
-      --text-primary: #402d2d;
-      --text-secondary: #72585a;
-      --text-muted: #9b7f82;
+      --ink: #F5F4F0;
+      --ink-2: #FFFFFF;
+      --ink-3: #FFFFFF;
+      --border: #E0DED8;
+      --border-light: #E0DED8;
+      --gold: #3D6B5E;
+      --gold-dim: rgba(61, 107, 94, 0.10);
+      --gold-glow: rgba(61, 107, 94, 0.06);
+      --text-primary: #1A1A1A;
+      --text-secondary: #9A9890;
+      --text-muted: #9A9890;
       --success: #2f8a72;
       --success-dim: rgba(47, 138, 114, 0.12);
-      --danger: #b15f6b;
-      --danger-dim: rgba(177, 95, 107, 0.12);
-      --panel-line: rgba(184, 130, 120, 0.12);
-      --shadow-soft: 0 18px 45px rgba(116, 74, 77, 0.08);
-      --radius: 16px;
+      --danger: #8C5A5A;
+      --danger-dim: rgba(140, 90, 90, 0.10);
+      --panel-line: #EEF0EE;
+      --shadow-soft: none;
+      --radius: 10px;
       --radius-sm: 10px;
-      --radius-full: 999px;
+      --radius-full: 8px;
     }
 
     body {
       background: var(--ink);
       color: var(--text-primary);
       font-family: 'DM Sans', sans-serif;
-      font-weight: 300;
+      font-weight: 400;
       min-height: 100vh;
     }
 
     .dashboard {
       min-height: 100vh;
-      background:
-        radial-gradient(ellipse 60% 40% at 80% 10%, rgba(184,130,120,0.10) 0%, transparent 62%),
-        radial-gradient(ellipse 50% 60% at 10% 80%, rgba(209,170,157,0.10) 0%, transparent 62%),
-        var(--ink);
+      background: var(--ink);
       padding: 0;
     }
 
@@ -545,9 +542,9 @@ export default function DashboardClient({
 
     .sidebar {
       width: 72px;
-      background: rgba(255, 249, 246, 0.92);
-      border-right: 1px solid var(--border);
-      box-shadow: 4px 0 24px rgba(116, 74, 77, 0.05);
+      background: #fbfaf7;
+      border-right: 0.5px solid var(--border);
+      box-shadow: none;
       display: flex;
       flex-direction: column;
       align-items: center;
@@ -571,16 +568,16 @@ export default function DashboardClient({
       margin-bottom: 24px;
       font-family: 'Playfair Display', serif;
       font-size: 18px;
-      color: var(--ink);
-      font-weight: 600;
-      box-shadow: 0 12px 26px rgba(184, 130, 120, 0.18);
+      color: #ffffff;
+      font-weight: 500;
+      box-shadow: none;
     }
 
     .nav-btn {
       width: 44px;
       height: 44px;
       border-radius: 12px;
-      border: 1px solid transparent;
+      border: 0.5px solid transparent;
       background: transparent;
       color: var(--text-muted);
       cursor: pointer;
@@ -593,7 +590,7 @@ export default function DashboardClient({
     }
 
     .nav-btn:hover {
-      background: rgba(184, 130, 120, 0.10);
+      background: rgba(61, 107, 94, 0.06);
       color: var(--text-primary);
       border-color: var(--border-light);
     }
@@ -601,14 +598,14 @@ export default function DashboardClient({
     .nav-btn.active {
       background: var(--gold-dim);
       color: var(--gold);
-      border-color: rgba(184,130,120,0.28);
+      border-color: var(--gold);
     }
 
     .nav-tooltip {
       position: absolute;
       left: calc(100% + 12px);
       background: var(--ink-2);
-      border: 1px solid var(--border-light);
+      border: 0.5px solid var(--border-light);
       color: var(--text-primary);
       font-size: 12px;
       font-weight: 400;
@@ -631,6 +628,7 @@ export default function DashboardClient({
       flex: 1;
       min-width: 0;
       padding: 28px clamp(18px, 2.4vw, 40px) 40px;
+      background: transparent;
     }
 
     /* ── Header ── */
@@ -641,9 +639,9 @@ export default function DashboardClient({
 
     .header-eyebrow {
       font-family: 'DM Mono', monospace;
-      font-size: 11px;
-      letter-spacing: 0.2em;
-      color: var(--gold);
+      font-size: 10px;
+      letter-spacing: 0.1em;
+      color: var(--text-muted);
       text-transform: uppercase;
       margin-bottom: 12px;
     }
@@ -651,7 +649,7 @@ export default function DashboardClient({
     .header-title {
       font-family: 'Playfair Display', serif;
       font-size: clamp(36px, 4vw, 52px);
-      font-weight: 400;
+      font-weight: 500;
       line-height: 1.15;
       color: var(--text-primary);
       max-width: 680px;
@@ -668,7 +666,7 @@ export default function DashboardClient({
       color: var(--text-secondary);
       line-height: 1.7;
       max-width: 680px;
-      font-weight: 300;
+      font-weight: 400;
     }
 
     /* ── Toast ── */
@@ -680,7 +678,7 @@ export default function DashboardClient({
       border-radius: var(--radius-sm);
       font-size: 13.5px;
       margin-bottom: 32px;
-      border: 1px solid;
+      border: 0.5px solid;
     }
 
     .toast.success {
@@ -709,20 +707,20 @@ export default function DashboardClient({
 
     .stat-card {
       background: var(--ink-2);
-      border: 1px solid var(--border);
+      border: 0.5px solid var(--border);
       border-radius: var(--radius);
-      padding: 24px;
+      padding: 1rem 1.25rem;
       position: relative;
       overflow: hidden;
       transition: border-color 0.2s ease;
-      box-shadow: var(--shadow-soft);
+      box-shadow: none;
     }
 
     .stat-card::before {
       content: '';
       position: absolute;
       top: 0; left: 0; right: 0;
-      height: 2px;
+      height: 1px;
       background: linear-gradient(90deg, var(--gold), transparent);
       opacity: 0;
       transition: opacity 0.2s ease;
@@ -734,7 +732,7 @@ export default function DashboardClient({
     .stat-label {
       font-family: 'DM Mono', monospace;
       font-size: 10px;
-      letter-spacing: 0.15em;
+      letter-spacing: 0.1em;
       text-transform: uppercase;
       color: var(--text-muted);
       margin-bottom: 12px;
@@ -742,8 +740,8 @@ export default function DashboardClient({
 
     .stat-value {
       font-family: 'Playfair Display', serif;
-      font-size: 48px;
-      font-weight: 400;
+      font-size: 28px;
+      font-weight: 500;
       color: var(--text-primary);
       line-height: 1;
     }
@@ -769,12 +767,12 @@ export default function DashboardClient({
 
     .card {
       background: var(--ink-2);
-      border: 1px solid var(--border);
+      border: 0.5px solid var(--border);
       border-radius: var(--radius);
-      padding: 28px;
+      padding: 1rem 1.25rem;
       transition: border-color 0.2s ease;
       min-width: 0;
-      box-shadow: var(--shadow-soft);
+      box-shadow: none;
     }
 
     .card:hover { border-color: var(--border-light); }
@@ -782,7 +780,7 @@ export default function DashboardClient({
     .card-eyebrow {
       font-family: 'DM Mono', monospace;
       font-size: 10px;
-      letter-spacing: 0.15em;
+      letter-spacing: 0.1em;
       text-transform: uppercase;
       color: var(--text-muted);
       margin-bottom: 12px;
@@ -791,7 +789,7 @@ export default function DashboardClient({
     .card-title {
       font-family: 'Playfair Display', serif;
       font-size: 24px;
-      font-weight: 400;
+      font-weight: 500;
       color: var(--text-primary);
       margin-bottom: 12px;
       line-height: 1.3;
@@ -811,9 +809,9 @@ export default function DashboardClient({
       gap: 8px;
       padding: 12px 24px;
       background: var(--gold);
-      color: #fff9f6;
+      color: #FFFFFF;
       border: none;
-      border-radius: var(--radius-full);
+      border-radius: 8px;
       font-family: 'DM Sans', sans-serif;
       font-size: 13.5px;
       font-weight: 500;
@@ -823,9 +821,9 @@ export default function DashboardClient({
     }
 
     .btn-primary:hover {
-      background: #a96f67;
-      transform: translateY(-1px);
-      box-shadow: 0 8px 24px rgba(184,130,120,0.22);
+      background: #2F5449;
+      transform: none;
+      box-shadow: none;
     }
 
     .btn-primary:disabled {
@@ -841,9 +839,9 @@ export default function DashboardClient({
       gap: 8px;
       padding: 11px 20px;
       background: transparent;
-      color: var(--text-secondary);
-      border: 1px solid var(--border-light);
-      border-radius: var(--radius-full);
+      color: var(--gold);
+      border: 0.5px solid var(--gold);
+      border-radius: 8px;
       font-family: 'DM Sans', sans-serif;
       font-size: 13px;
       font-weight: 400;
@@ -853,9 +851,9 @@ export default function DashboardClient({
     }
 
     .btn-ghost:hover {
-      background: rgba(184, 130, 120, 0.10);
-      color: var(--text-primary);
-      border-color: var(--border-light);
+      background: rgba(61, 107, 94, 0.06);
+      color: var(--gold);
+      border-color: var(--gold);
     }
 
     .btn-dark {
@@ -863,10 +861,10 @@ export default function DashboardClient({
       align-items: center;
       gap: 8px;
       padding: 10px 18px;
-      background: #fcf5f1;
-      color: var(--text-primary);
-      border: 1px solid var(--border-light);
-      border-radius: var(--radius-full);
+      background: transparent;
+      color: var(--gold);
+      border: 0.5px solid var(--gold);
+      border-radius: 8px;
       font-family: 'DM Sans', sans-serif;
       font-size: 13px;
       font-weight: 400;
@@ -876,8 +874,8 @@ export default function DashboardClient({
     }
 
     .btn-dark:hover {
-      background: #f5e8e2;
-      border-color: rgba(184,130,120,0.28);
+      background: rgba(61, 107, 94, 0.06);
+      border-color: var(--gold);
     }
 
     .btn-row {
@@ -899,7 +897,7 @@ export default function DashboardClient({
     .section-title {
       font-family: 'Playfair Display', serif;
       font-size: 22px;
-      font-weight: 400;
+      font-weight: 500;
       color: var(--text-primary);
     }
 
@@ -917,7 +915,7 @@ export default function DashboardClient({
     .field-label {
       font-family: 'DM Mono', monospace;
       font-size: 10px;
-      letter-spacing: 0.15em;
+      letter-spacing: 0.1em;
       text-transform: uppercase;
       color: var(--text-muted);
     }
@@ -926,13 +924,13 @@ export default function DashboardClient({
     .field-textarea,
     .field-file {
       background: var(--ink-3);
-      border: 1px solid var(--border);
+      border: 0.5px solid var(--border);
       border-radius: var(--radius-sm);
       padding: 12px 16px;
       color: var(--text-primary);
       font-family: 'DM Sans', sans-serif;
       font-size: 14px;
-      font-weight: 300;
+      font-weight: 400;
       outline: none;
       transition: border-color 0.2s ease;
       width: 100%;
@@ -945,7 +943,8 @@ export default function DashboardClient({
 
     .field-input:focus,
     .field-textarea:focus {
-      border-color: rgba(184,130,120,0.45);
+      border-color: var(--gold);
+      box-shadow: none;
     }
 
     .field-textarea {
@@ -987,7 +986,7 @@ export default function DashboardClient({
       gap: 20px;
       padding: 20px 24px;
       background: var(--ink-3);
-      border: 1px solid var(--border);
+      border: 0.5px solid var(--border);
       border-radius: var(--radius-sm);
       transition: border-color 0.2s ease;
     }
@@ -1010,7 +1009,7 @@ export default function DashboardClient({
     }
 
     .job-list.scrollable::-webkit-scrollbar-thumb {
-      background: rgba(184,130,120,0.26);
+      background: var(--border);
       border-radius: 999px;
     }
 
@@ -1056,13 +1055,13 @@ export default function DashboardClient({
     .badge-gold {
       background: var(--gold-dim);
       color: var(--gold);
-      border: 1px solid rgba(184,130,120,0.24);
+      border: 0.5px solid rgba(61, 107, 94, 0.18);
     }
 
     .badge-success {
       background: var(--success-dim);
       color: var(--success);
-      border: 1px solid rgba(78,204,163,0.25);
+      border: 0.5px solid rgba(47,138,114,0.22);
     }
 
     /* ── Tailored resume panel ── */
@@ -1095,7 +1094,7 @@ export default function DashboardClient({
 
     .tailored-block {
       background: var(--ink-3);
-      border: 1px solid var(--border);
+      border: 0.5px solid var(--border);
       border-radius: var(--radius-sm);
       padding: 18px;
     }
@@ -1105,7 +1104,7 @@ export default function DashboardClient({
       font-size: 10px;
       letter-spacing: 0.15em;
       text-transform: uppercase;
-      color: var(--gold);
+      color: var(--text-muted);
       margin-bottom: 10px;
     }
 
@@ -1124,8 +1123,8 @@ export default function DashboardClient({
     .skill-tag {
       padding: 5px 12px;
       background: var(--gold-glow);
-      border: 1px solid rgba(184,130,120,0.18);
-      border-radius: var(--radius-full);
+      border: 0.5px solid rgba(61, 107, 94, 0.18);
+      border-radius: 999px;
       font-size: 12px;
       color: var(--gold);
       font-family: 'DM Mono', monospace;
@@ -1138,8 +1137,8 @@ export default function DashboardClient({
 
     .alignment-item {
       padding: 10px 14px;
-      background: var(--ink-2);
-      border-left: 2px solid var(--gold);
+      background: #FCFCFA;
+      border-left: 1.5px solid var(--gold);
       border-radius: 0 6px 6px 0;
       font-size: 13px;
       color: var(--text-secondary);
@@ -1147,8 +1146,8 @@ export default function DashboardClient({
     }
 
     .code-block {
-      background: #fbf4ef;
-      border: 1px solid var(--border);
+      background: #FFFFFF;
+      border: 0.5px solid var(--border);
       border-radius: var(--radius-sm);
       padding: 20px;
       font-family: 'DM Mono', monospace;
@@ -1179,7 +1178,7 @@ export default function DashboardClient({
 
     .score-item {
       background: var(--ink-2);
-      border: 1px solid var(--border);
+      border: 0.5px solid var(--border);
       border-radius: 8px;
       padding: 10px 12px;
     }
@@ -1211,12 +1210,12 @@ export default function DashboardClient({
       flex-direction: column;
       padding: 8px 12px;
       background: var(--ink-3);
-      border: 1px solid var(--border);
+      border: 0.5px solid var(--border);
       border-radius: 8px;
       transition: border-color 0.15s ease;
     }
 
-    .keyword-chip:hover { border-color: rgba(184,130,120,0.26); }
+    .keyword-chip:hover { border-color: var(--gold); }
 
     .keyword-chip strong {
       font-size: 13px;
@@ -1262,14 +1261,14 @@ export default function DashboardClient({
     /* ── Recent applied mini-cards ── */
     .recent-card {
       padding: 14px 18px;
-      background: var(--ink-3);
-      border: 1px solid var(--border);
+      background: #FFFFFF;
+      border: 0.5px solid #EEEEEE;
       border-radius: var(--radius-sm);
       transition: border-color 0.15s ease;
       min-height: 92px;
     }
 
-    .recent-card:hover { border-color: rgba(184,130,120,0.24); }
+    .recent-card:hover { border-color: var(--gold); }
 
     .recent-card strong {
       font-size: 14px;
@@ -1284,10 +1283,24 @@ export default function DashboardClient({
       margin-top: 3px;
     }
 
+    .recent-title-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .recent-dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: var(--gold);
+      flex-shrink: 0;
+    }
+
     /* ── Number line under stat ── */
     .stat-accent-line {
       width: 32px;
-      height: 2px;
+      height: 1.5px;
       background: var(--gold);
       margin-top: 12px;
     }
@@ -1313,7 +1326,7 @@ export default function DashboardClient({
     .profile-block {
       padding: 16px 18px;
       background: var(--gold-glow);
-      border: 1px solid rgba(184,130,120,0.2);
+      border: 0.5px solid rgba(61, 107, 94, 0.18);
       border-radius: var(--radius-sm);
       margin-bottom: 16px;
     }
@@ -1338,7 +1351,7 @@ export default function DashboardClient({
     .email-card {
       padding: 16px 18px;
       background: var(--ink-3);
-      border: 1px solid var(--border);
+      border: 0.5px solid var(--border);
       border-radius: var(--radius-sm);
     }
 
@@ -1511,10 +1524,12 @@ export default function DashboardClient({
                 </div>
                 <div className="stat-card">
                   <p className="stat-label">Status</p>
-                  <p className="stat-value" style={{ fontSize: 28, paddingTop: 10 }}>
-                    {data ? "Live" : "—"}
+                  <p className="stat-value" style={{ fontSize: 28, paddingTop: 10, color: data ? "var(--gold)" : "var(--text-primary)", fontWeight: 500 }}>
+                    <span style={{ display: "inline-block", paddingBottom: 4, borderBottom: data ? "1.5px solid var(--gold)" : "none" }}>
+                      {data ? "Live" : "—"}
+                    </span>
                   </p>
-                  <div className="stat-accent-line" />
+                  {!data && <div className="stat-accent-line" />}
                   <p className="stat-desc">backend connection</p>
                 </div>
               </div>
@@ -1522,13 +1537,16 @@ export default function DashboardClient({
               <div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0,1fr))", gap: 10, padding: "0 28px 16px" }}>
                 <JobTypePieChart jobs={recentJobs} />
                 <WeeklyActivityChart jobs={recentJobs} />
-                <div style={{ background: "var(--ink-2)", border: "1px solid var(--border)", borderRadius: 10, padding: 18, boxShadow: "var(--shadow-soft)" }}>
+                <div style={{ background: "var(--ink-2)", border: "0.5px solid var(--border)", borderRadius: 10, padding: "1rem 1.25rem", boxShadow: "none" }}>
                   <p style={{ fontSize: 10, letterSpacing: "0.1em", textTransform: "uppercase", color: "var(--text-muted)", marginBottom: 14 }}>Recently applied</p>
-                  <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                  <div style={{ display: "flex", flexDirection: "column" }}>
                     {recentJobs.slice(0, 4).map((job, i) => (
-                      <div key={`${job.title}-${job.company}-${i}`} style={{ background: "var(--ink-3)", borderRadius: 8, padding: "10px 14px", border: "1px solid var(--border)" }}>
-                        <div style={{ fontSize: 13, color: "var(--text-primary)", fontWeight: 500 }}>{job.title}</div>
-                        <div style={{ fontSize: 11, color: "var(--text-secondary)", marginTop: 2 }}>{job.company}{job.location ? ` · ${job.location}` : ""}</div>
+                      <div key={`${job.title}-${job.company}-${i}`} style={{ padding: "10px 0", borderBottom: i < Math.min(recentJobs.length, 4) - 1 ? "0.5px solid #EEEEEE" : "none" }}>
+                        <div className="recent-title-row">
+                          <span className="recent-dot" />
+                          <div style={{ fontSize: 13, color: "var(--text-primary)", fontWeight: 500 }}>{job.title}</div>
+                        </div>
+                        <div style={{ fontSize: 11, color: "var(--text-secondary)", marginTop: 2, paddingLeft: 14 }}>{job.company}{job.location ? ` · ${job.location}` : ""}</div>
                       </div>
                     ))}
                     {!recentJobs.length && (
@@ -1552,7 +1570,7 @@ export default function DashboardClient({
                   </div>
                 </div>
 
-                <div className="card" style={{ background: "#fbf2ed" }}>
+                <div className="card">
                   <p className="card-eyebrow">Legacy Workspace</p>
                   <h2 className="card-title" style={{ color: "var(--text-secondary)" }}>ATS Tools</h2>
                   <p className="card-body">
@@ -1589,10 +1607,10 @@ export default function DashboardClient({
                         <div
                           key={`${update.id}-${update.job_id}`}
                           style={{
-                            background: "var(--ink-3)",
+                            background: "#FFFFFF",
                             borderRadius: 8,
                             padding: "12px 14px",
-                            border: "1px solid var(--border)",
+                            border: "0.5px solid #EEEEEE",
                             display: "grid",
                             gap: 5,
                           }}
@@ -1629,10 +1647,10 @@ export default function DashboardClient({
                           <div
                             key={job.id}
                             style={{
-                              background: "var(--ink-3)",
+                              background: "#FFFFFF",
                               borderRadius: 8,
                               padding: "12px 14px",
-                              border: "1px solid var(--border)",
+                              border: "0.5px solid #EEEEEE",
                               display: "grid",
                               gap: 6,
                             }}
@@ -1678,7 +1696,7 @@ export default function DashboardClient({
               <div className="section-header">
                 <div>
                   <p className="header-eyebrow">Job Tracker</p>
-                  <h1 style={{ fontFamily: "'Playfair Display', serif", fontSize: 34, fontWeight: 400, lineHeight: 1.2 }}>
+                  <h1 style={{ fontFamily: "'Playfair Display', serif", fontSize: 34, fontWeight: 500, lineHeight: 1.2 }}>
                     Log an applied role
                   </h1>
                 </div>
@@ -1747,7 +1765,7 @@ export default function DashboardClient({
                           marginTop: 8,
                           padding: 16,
                           borderRadius: 14,
-                          border: "1px solid var(--border-light)",
+                          border: "0.5px solid var(--border-light)",
                           background: "var(--gold-glow)",
                           display: "grid",
                           gap: 14,
@@ -1765,14 +1783,14 @@ export default function DashboardClient({
                               fontSize: 11,
                               textTransform: "uppercase",
                               letterSpacing: "0.08em",
-                              color: trackerPreview.confidence_level === "high" ? "#fff9f6" : "var(--text-primary)",
+                              color: trackerPreview.confidence_level === "high" ? "#FFFFFF" : "var(--text-primary)",
                               background:
                                 trackerPreview.confidence_level === "high"
                                   ? "var(--gold)"
                                   : trackerPreview.confidence_level === "medium"
-                                    ? "rgba(184,130,120,0.18)"
-                                    : "rgba(177,95,107,0.14)",
-                              border: "1px solid var(--border-light)",
+                                    ? "rgba(61, 107, 94, 0.12)"
+                                    : "rgba(140, 90, 90, 0.10)",
+                              border: "0.5px solid var(--border-light)",
                             }}
                           >
                             {trackerPreview.confidence_level} confidence · {trackerPreview.confidence_score}
@@ -1783,8 +1801,8 @@ export default function DashboardClient({
                           <div
                             style={{
                               borderRadius: 12,
-                              border: "1px solid rgba(177,95,107,0.24)",
-                              background: "rgba(177,95,107,0.08)",
+                              border: "0.5px solid rgba(140,90,90,0.22)",
+                              background: "rgba(140,90,90,0.06)",
                               padding: 12,
                               display: "grid",
                               gap: 8,
@@ -1995,7 +2013,7 @@ export default function DashboardClient({
               <div className="section-header">
                 <div>
                   <p className="header-eyebrow">Legacy Workspace</p>
-                  <h1 style={{ fontFamily: "'Playfair Display', serif", fontSize: 34, fontWeight: 400, lineHeight: 1.2 }}>
+                  <h1 style={{ fontFamily: "'Playfair Display', serif", fontSize: 34, fontWeight: 500, lineHeight: 1.2 }}>
                     Job Search & Matcher
                   </h1>
                 </div>
