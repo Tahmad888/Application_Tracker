@@ -140,7 +140,8 @@ type DashboardClientProps = {
 
 type ResponseStatus =
   | "Awaiting Reply"
-  | "Availability Requested"
+  | "Offer Awaiting Response"
+  | "Recruiter Call Scheduled"
   | "Interview Scheduled"
   | "Interviewing"
   | "Closed";
@@ -170,14 +171,6 @@ type CalendarEventRecord = {
   notes: string;
 };
 
-type FocusItem = {
-  id: string;
-  kind: "response" | "calendar";
-  title: string;
-  detail: string;
-  priority: number;
-};
-
 type ViewMode = "home" | "job-search" | "job-tracker" | "ops-dashboard";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://127.0.0.1:5000";
@@ -191,17 +184,23 @@ const SCORE_LABELS: Record<string, string> = {
 };
 
 const RESPONSE_HUB_STORAGE_KEY = "career-command-center-response-hub";
-const RESPONSE_STATUSES: ResponseStatus[] = [
-  "Awaiting Reply",
-  "Availability Requested",
-  "Interview Scheduled",
-  "Interviewing",
-  "Closed",
+const RESPONSE_STATUS_OPTIONS: Array<{ value: ResponseStatus; label: string }> = [
+  { value: "Awaiting Reply", label: "Awaiting Reply" },
+  { value: "Offer Awaiting Response", label: "Job Offer Awaiting Response" },
+  { value: "Recruiter Call Scheduled", label: "Recruiter Call Scheduled" },
+  { value: "Interview Scheduled", label: "Interview Scheduled" },
+  { value: "Interviewing", label: "Active Interview Process" },
+  { value: "Closed", label: "Closed" },
 ];
-const CALENDAR_EVENT_TYPES: CalendarEventType[] = ["Interview", "Recruiter Call"];
 
 function createLocalId() {
   return `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function eventTypeForStatus(status: ResponseStatus): CalendarEventType | null {
+  if (status === "Recruiter Call Scheduled") return "Recruiter Call";
+  if (status === "Interview Scheduled") return "Interview";
+  return null;
 }
 
 function differenceInDays(dateLike: string) {
@@ -210,14 +209,6 @@ function differenceInDays(dateLike: string) {
   if (Number.isNaN(target.getTime())) return 0;
   const now = new Date();
   return Math.floor((now.getTime() - target.getTime()) / (1000 * 60 * 60 * 24));
-}
-
-function daysUntil(dateLike: string) {
-  if (!dateLike) return Number.POSITIVE_INFINITY;
-  const target = new Date(dateLike);
-  if (Number.isNaN(target.getTime())) return Number.POSITIVE_INFINITY;
-  const now = new Date();
-  return Math.ceil((target.getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
 }
 
 function formatShortDate(dateLike: string) {
@@ -239,6 +230,30 @@ function formatShortDateTime(dateLike: string) {
   });
 }
 
+function formatWeekdayTime(dateLike: string) {
+  if (!dateLike) return "Time not set";
+  const parsed = new Date(dateLike);
+  if (Number.isNaN(parsed.getTime())) return dateLike;
+  return parsed.toLocaleString(undefined, {
+    weekday: "short",
+    hour: "numeric",
+    minute: "2-digit",
+  });
+}
+
+function getTimePartsUntil(dateLike: string) {
+  const target = new Date(dateLike);
+  if (Number.isNaN(target.getTime())) {
+    return { days: 0, hours: 0, minutes: 0 };
+  }
+  const diff = Math.max(target.getTime() - Date.now(), 0);
+  const totalMinutes = Math.floor(diff / (1000 * 60));
+  const days = Math.floor(totalMinutes / (60 * 24));
+  const hours = Math.floor((totalMinutes % (60 * 24)) / 60);
+  const minutes = totalMinutes % 60;
+  return { days, hours, minutes };
+}
+
 function JobTypePieChart({ jobs }: { jobs: { title: string }[] }) {
   const categorize = (title: string): string => {
     const t = title.toLowerCase();
@@ -258,12 +273,20 @@ function JobTypePieChart({ jobs }: { jobs: { title: string }[] }) {
   const labels = Object.keys(counts);
   const values = Object.values(counts);
   const total = values.reduce((a, b) => a + b, 0);
-  const COLORS = ["#3D6B5E", "#6A9E92", "#A8C4BE", "#D4E4E1"];
+  const COLORS = ["#5A8DE1", "#53A874", "#C78533", "#A16BDB", "#D3DAE8"];
 
   return (
-    <div style={{ background: "var(--ink-2)", border: "0.5px solid var(--border)", borderRadius: 10, padding: "1rem 1.25rem", boxShadow: "none" }}>
-      <p style={{ fontSize: 10, letterSpacing: "0.1em", textTransform: "uppercase", color: "var(--text-muted)", marginBottom: 14 }}>Job type mix</p>
-      <div style={{ position: "relative", width: "100%", height: 140 }}>
+    <div
+      style={{
+        background: "#FFFFFF",
+        border: "1px solid #DFE6F2",
+        borderRadius: 14,
+        padding: "1.1rem 1.25rem",
+        boxShadow: "0 1px 0 rgba(26,26,26,0.02)",
+      }}
+    >
+      <p style={{ fontSize: 11, letterSpacing: "0.1em", textTransform: "uppercase", color: "var(--text-muted)", marginBottom: 16 }}>Applications by type</p>
+      <div style={{ position: "relative", width: "100%", height: 164 }}>
         {total > 0 ? (
           <Doughnut
             data={{
@@ -290,24 +313,24 @@ function JobTypePieChart({ jobs }: { jobs: { title: string }[] }) {
             }}
           />
         ) : (
-          <div style={{ height: "100%", borderRadius: "50%", border: "10px solid var(--panel-line)" }} />
+          <div style={{ height: "100%", borderRadius: "50%", border: "10px solid #E7EDF8" }} />
         )}
         <div style={{ position: "absolute", top: "50%", left: "50%", transform: "translate(-50%,-50%)", textAlign: "center", pointerEvents: "none" }}>
-          <div style={{ fontSize: 22, color: "var(--text-primary)" }}>{total}</div>
-          <div style={{ fontSize: 10, color: "var(--text-muted)" }}>total</div>
+          <div style={{ fontSize: 25, color: "var(--text-primary)", fontWeight: 500 }}>{total}</div>
+          <div style={{ fontSize: 11, color: "var(--text-muted)" }}>total</div>
         </div>
       </div>
       <div style={{ display: "flex", flexDirection: "column", gap: 7, marginTop: 12 }}>
         {labels.length ? labels.map((label, i) => (
-          <div key={label} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", fontSize: 11 }}>
-            <span style={{ display: "flex", alignItems: "center", gap: 7, color: "var(--text-secondary)" }}>
-              <span style={{ width: 8, height: 8, borderRadius: 2, background: COLORS[i], flexShrink: 0, display: "inline-block" }} />
+          <div key={label} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", fontSize: 12 }}>
+            <span style={{ display: "flex", alignItems: "center", gap: 8, color: "#5B6474" }}>
+              <span style={{ width: 9, height: 9, borderRadius: 2, background: COLORS[i], flexShrink: 0, display: "inline-block" }} />
               {label}
             </span>
-            <span style={{ color: "var(--text-muted)" }}>{Math.round((values[i] / total) * 100)}%</span>
+            <span style={{ color: "#6A7488", fontWeight: 500, fontSize: 12 }}>{Math.round((values[i] / total) * 100)}%</span>
           </div>
         )) : (
-          <span style={{ color: "var(--text-muted)", fontSize: 11 }}>No applications logged yet.</span>
+          <span style={{ color: "var(--text-muted)", fontSize: 12 }}>No applications logged yet.</span>
         )}
       </div>
     </div>
@@ -324,16 +347,24 @@ function WeeklyActivityChart({ jobs }: { jobs: { applied_at: string }[] }) {
   const max = Math.max(...counts, 1);
 
   return (
-    <div style={{ background: "var(--ink-2)", border: "0.5px solid var(--border)", borderRadius: 10, padding: "1rem 1.25rem", boxShadow: "none" }}>
-      <p style={{ fontSize: 10, letterSpacing: "0.1em", textTransform: "uppercase", color: "var(--text-muted)", marginBottom: 14 }}>Weekly activity</p>
+    <div
+      style={{
+        background: "#FFFFFF",
+        border: "1px solid #DFE6F2",
+        borderRadius: 14,
+        padding: "1.1rem 1.25rem",
+        boxShadow: "0 1px 0 rgba(26,26,26,0.02)",
+      }}
+    >
+      <p style={{ fontSize: 11, letterSpacing: "0.1em", textTransform: "uppercase", color: "var(--text-muted)", marginBottom: 16 }}>This week&apos;s activity</p>
       <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
         {days.map((day, i) => (
           <div key={day} style={{ display: "flex", flexDirection: "column", gap: 3 }}>
-            <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, color: "var(--text-secondary)" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, color: "#6A7488" }}>
               <span>{day}</span><span>{counts[i]}</span>
             </div>
-            <div style={{ background: "var(--panel-line)", borderRadius: 3, height: 5, width: "100%" }}>
-              <div style={{ borderRadius: 3, height: 5, width: `${Math.round((counts[i] / max) * 100)}%`, background: "var(--gold)" }} />
+            <div style={{ background: "#E7EEF9", borderRadius: 4, height: 8, width: "100%" }}>
+              <div style={{ borderRadius: 4, height: 8, width: `${Math.round((counts[i] / max) * 100)}%`, background: "#5A8DE1" }} />
             </div>
           </div>
         ))}
@@ -370,13 +401,6 @@ export default function DashboardClient({
     contactHandle: "",
     status: "Awaiting Reply" as ResponseStatus,
     lastUpdated: new Date().toISOString().slice(0, 10),
-    notes: "",
-  });
-  const [calendarDraft, setCalendarDraft] = useState({
-    company: "",
-    role: "",
-    recruiterName: "",
-    type: "Interview" as CalendarEventType,
     startsAt: "",
     location: "",
     notes: "",
@@ -617,35 +641,21 @@ export default function DashboardClient({
     location: job.location,
     applied_at: job.application?.applied_at ?? job.posted_at ?? "",
   }));
-  const recentStatusNotifications = data?.status_notifications ?? [];
-  const actionableStatuses = new Set([
-    "In Review",
-    "Recruiter Screen",
-    "Assessment",
-    "Interview",
-    "Final Round",
-    "Offer",
-    "Rejected",
-  ]);
-  const latestNotificationByJob = new Map<number, StatusNotification>(
-    recentStatusNotifications.map((item) => [item.job_id, item]),
-  );
-  const actionableJobs = sortedAppliedJobs.filter((job) =>
-    actionableStatuses.has(job.application?.status ?? ""),
-  );
   const sortedResponses = [...responses].sort((left, right) => {
     const rank = (status: ResponseStatus) => {
       switch (status) {
-        case "Availability Requested":
+        case "Offer Awaiting Response":
           return 0;
-        case "Interview Scheduled":
+        case "Recruiter Call Scheduled":
           return 1;
-        case "Interviewing":
+        case "Interview Scheduled":
           return 2;
-        case "Awaiting Reply":
+        case "Interviewing":
           return 3;
-        case "Closed":
+        case "Awaiting Reply":
           return 4;
+        case "Closed":
+          return 5;
       }
     };
     const ranked = rank(left.status) - rank(right.status);
@@ -667,56 +677,46 @@ export default function DashboardClient({
     };
   });
 
-  const todaysFocus = [
-    ...sortedCalendarEvents
-      .filter((item) => daysUntil(item.startsAt) <= 7)
-      .map<FocusItem>((item) => ({
-        id: item.id,
-        kind: "calendar",
-        title: `${item.company} · ${item.type}`,
-        detail: `${item.company} · ${formatShortDateTime(item.startsAt)}`,
-        priority: daysUntil(item.startsAt) <= 1 ? 0 : 2,
-      })),
-    ...sortedResponses
-      .filter((item) => item.status !== "Closed")
-      .map<FocusItem>((item) => ({
-        id: item.id,
-        kind: "response",
-        title: `${item.company} · ${item.role}`,
-        detail:
-          item.status === "Availability Requested"
-            ? `${item.recruiterName || "Recruiter"} needs your schedule`
-            : item.status === "Interview Scheduled"
-              ? `${item.contactChannel} · interview scheduled`
-              : item.status === "Interviewing"
-                ? `${item.contactChannel} · active interview process`
-                : `${item.contactChannel} · waiting for recruiter reply`,
-        priority:
-          item.status === "Availability Requested"
-            ? 0
-            : item.status === "Interview Scheduled"
-              ? 1
-              : item.status === "Interviewing"
-                ? 1
-                : differenceInDays(item.lastUpdated) >= 3
-                  ? 2
-                  : 3,
-      })),
-  ]
-    .sort((left, right) => left.priority - right.priority)
-    .slice(0, 8);
-
   const respondedOpportunities = responses.filter((item) => item.status !== "Awaiting Reply" && item.status !== "Closed");
-  const availabilityRequestedCount = responses.filter((item) => item.status === "Availability Requested").length;
-  const scheduledCount = responses.filter((item) => item.status === "Interview Scheduled").length;
+  const offerAwaitingResponseCount = responses.filter((item) => item.status === "Offer Awaiting Response").length;
+  const scheduledCount = responses.filter((item) => item.status === "Interview Scheduled" || item.status === "Recruiter Call Scheduled").length;
   const waitingReplyCount = responses.filter((item) => item.status === "Awaiting Reply").length;
   const interviewingCount = responses.filter((item) => item.status === "Interviewing").length;
   const groupedResponses = {
-    availabilityRequested: sortedResponses.filter((item) => item.status === "Availability Requested"),
-    scheduled: sortedResponses.filter((item) => item.status === "Interview Scheduled"),
+    offerAwaitingResponse: sortedResponses.filter((item) => item.status === "Offer Awaiting Response"),
+    scheduled: sortedResponses.filter((item) => item.status === "Interview Scheduled" || item.status === "Recruiter Call Scheduled"),
     interviewing: sortedResponses.filter((item) => item.status === "Interviewing"),
     waiting: sortedResponses.filter((item) => item.status === "Awaiting Reply"),
   };
+  const upcomingCalendarEvents = sortedCalendarEvents.filter((item) => {
+    const parsed = new Date(item.startsAt);
+    return !Number.isNaN(parsed.getTime()) && parsed.getTime() >= Date.now();
+  });
+  const nextCalendarEvent = upcomingCalendarEvents[0] ?? null;
+  const nextCalendarCountdown = nextCalendarEvent
+    ? getTimePartsUntil(nextCalendarEvent.startsAt)
+    : { days: 0, hours: 0, minutes: 0 };
+  const homeUpcomingEvents = upcomingCalendarEvents.slice(0, 4);
+  const responseRate = sortedAppliedJobs.length
+    ? Math.round((respondedOpportunities.length / sortedAppliedJobs.length) * 100)
+    : 0;
+  const activeProcessesCount = offerAwaitingResponseCount + scheduledCount + interviewingCount;
+  const greetingLine = new Date().toLocaleDateString(undefined, {
+    weekday: "long",
+    month: "long",
+    day: "numeric",
+  });
+  const recentAppliedCards = sortedAppliedJobs.slice(0, 4);
+  const schedulingStatusSelected = eventTypeForStatus(responseDraft.status) !== null;
+
+  function handleResponseStatusChange(status: ResponseStatus) {
+    setResponseDraft((current) => ({
+      ...current,
+      status,
+      startsAt: eventTypeForStatus(status) ? current.startsAt : "",
+      location: eventTypeForStatus(status) ? current.location : "",
+    }));
+  }
 
   function updateResponseStatus(id: string, status: ResponseStatus) {
     setResponses((current) =>
@@ -732,9 +732,22 @@ export default function DashboardClient({
     );
   }
 
+  function deleteCalendarEvent(id: string) {
+    setCalendarEvents((current) => current.filter((event) => event.id !== id));
+  }
+
+  function deleteResponse(id: string) {
+    setResponses((current) => current.filter((record) => record.id !== id));
+  }
+
   function addResponse(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!responseDraft.company.trim() || !responseDraft.role.trim()) return;
+
+    const eventType = eventTypeForStatus(responseDraft.status);
+    const shouldCreateEvent = Boolean(responseDraft.startsAt) && Boolean(eventType);
+    const resolvedStatus = responseDraft.status;
+
     setResponses((current) => [
       {
         id: createLocalId(),
@@ -743,10 +756,26 @@ export default function DashboardClient({
         role: responseDraft.role.trim(),
         recruiterName: responseDraft.recruiterName.trim(),
         contactHandle: responseDraft.contactHandle.trim(),
+        status: resolvedStatus,
         notes: responseDraft.notes.trim(),
       },
       ...current,
     ]);
+    if (shouldCreateEvent) {
+      setCalendarEvents((current) => [
+        {
+          id: createLocalId(),
+          company: responseDraft.company.trim(),
+          role: responseDraft.role.trim(),
+          recruiterName: responseDraft.recruiterName.trim(),
+          type: eventType!,
+          startsAt: responseDraft.startsAt,
+          location: responseDraft.location.trim(),
+          notes: responseDraft.notes.trim(),
+        },
+        ...current,
+      ]);
+    }
     setResponseDraft({
       company: "",
       role: "",
@@ -755,30 +784,6 @@ export default function DashboardClient({
       contactHandle: "",
       status: "Awaiting Reply",
       lastUpdated: new Date().toISOString().slice(0, 10),
-      notes: "",
-    });
-  }
-
-  function addCalendarEvent(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    if (!calendarDraft.company.trim() || !calendarDraft.role.trim() || !calendarDraft.startsAt) return;
-    setCalendarEvents((current) => [
-      {
-        id: createLocalId(),
-        ...calendarDraft,
-        company: calendarDraft.company.trim(),
-        role: calendarDraft.role.trim(),
-        recruiterName: calendarDraft.recruiterName.trim(),
-        location: calendarDraft.location.trim(),
-        notes: calendarDraft.notes.trim(),
-      },
-      ...current,
-    ]);
-    setCalendarDraft({
-      company: "",
-      role: "",
-      recruiterName: "",
-      type: "Interview",
       startsAt: "",
       location: "",
       notes: "",
@@ -941,7 +946,7 @@ export default function DashboardClient({
 
     .header-title {
       font-family: 'Playfair Display', serif;
-      font-size: clamp(36px, 4vw, 52px);
+      font-size: clamp(38px, 4.2vw, 56px);
       font-weight: 500;
       line-height: 1.15;
       color: var(--text-primary);
@@ -955,7 +960,7 @@ export default function DashboardClient({
 
     .header-sub {
       margin-top: 16px;
-      font-size: 15px;
+      font-size: 16px;
       color: var(--text-secondary);
       line-height: 1.7;
       max-width: 680px;
@@ -969,7 +974,7 @@ export default function DashboardClient({
       gap: 10px;
       padding: 14px 18px;
       border-radius: var(--radius-sm);
-      font-size: 13.5px;
+      font-size: 14.5px;
       margin-bottom: 32px;
       border: 0.5px solid;
     }
@@ -1024,7 +1029,7 @@ export default function DashboardClient({
 
     .stat-label {
       font-family: 'DM Mono', monospace;
-      font-size: 10px;
+      font-size: 11px;
       letter-spacing: 0.1em;
       text-transform: uppercase;
       color: var(--text-muted);
@@ -1033,7 +1038,7 @@ export default function DashboardClient({
 
     .stat-value {
       font-family: 'Playfair Display', serif;
-      font-size: 28px;
+      font-size: 31px;
       font-weight: 500;
       color: var(--text-primary);
       line-height: 1;
@@ -1041,8 +1046,298 @@ export default function DashboardClient({
 
     .stat-desc {
       margin-top: 8px;
-      font-size: 12px;
+      font-size: 13px;
       color: var(--text-muted);
+    }
+
+    .home-shell {
+      display: grid;
+      gap: 14px;
+      padding: 0 28px 20px;
+    }
+
+    .home-hero {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 20px;
+      padding: 0 0 4px;
+    }
+
+    .home-hero-title {
+      font-size: 20px;
+      font-weight: 500;
+      color: var(--text-primary);
+      margin-bottom: 4px;
+    }
+
+    .home-hero-sub {
+      font-size: 15px;
+      color: var(--text-secondary);
+      line-height: 1.5;
+    }
+
+    .home-live-pill {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      padding: 7px 14px;
+      border-radius: 999px;
+      border: 1px solid rgba(123, 170, 84, 0.18);
+      background: rgba(123, 170, 84, 0.12);
+      color: #6F9D3F;
+      font-size: 13px;
+      font-weight: 500;
+      white-space: nowrap;
+    }
+
+    .home-stats-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 12px;
+    }
+
+    .home-main-grid {
+      display: grid;
+      grid-template-columns: minmax(0, 1.2fr) minmax(320px, 0.8fr);
+      gap: 12px;
+      align-items: start;
+    }
+
+    .home-left-stack,
+    .home-right-stack {
+      display: grid;
+      gap: 12px;
+    }
+
+    .spotlight-card {
+      background: #EAF3FF;
+      border: 1px solid #CFE0F8;
+      box-shadow: 0 1px 0 rgba(90, 141, 225, 0.06);
+    }
+
+    .spotlight-kicker {
+      font-size: 10px;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      color: #5d7d74;
+      margin-bottom: 12px;
+      font-family: 'DM Mono', monospace;
+    }
+
+    .spotlight-title {
+      font-size: 17px;
+      font-weight: 500;
+      color: #3B64A8;
+      line-height: 1.4;
+      margin-bottom: 4px;
+    }
+
+    .spotlight-meta {
+      font-size: 13px;
+      color: #5876A4;
+      line-height: 1.5;
+    }
+
+    .countdown-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 10px;
+      margin-top: 16px;
+    }
+
+    .countdown-box {
+      background: #FFFFFF;
+      border: 1px solid #D7E4F7;
+      border-radius: 10px;
+      padding: 14px 10px;
+      text-align: center;
+    }
+
+    .countdown-value {
+      font-size: 18px;
+      font-weight: 500;
+      color: #315FA9;
+      line-height: 1;
+    }
+
+    .countdown-label {
+      margin-top: 6px;
+      font-size: 11px;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: #5F7BAB;
+    }
+
+    .event-list {
+      display: grid;
+    }
+
+    .event-row {
+      display: grid;
+      grid-template-columns: auto minmax(0, 1fr) auto;
+      gap: 12px;
+      align-items: start;
+      padding: 14px 0;
+      border-bottom: 0.5px solid #EEEEEE;
+    }
+
+    .event-row:last-child {
+      border-bottom: none;
+      padding-bottom: 0;
+    }
+
+    .event-row:first-child {
+      padding-top: 0;
+    }
+
+    .event-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 999px;
+      margin-top: 7px;
+      flex-shrink: 0;
+    }
+
+    .event-dot.interview {
+      background: #4F83D8;
+    }
+
+    .event-dot.call {
+      background: #53A874;
+    }
+
+    .event-role {
+      font-size: 14px;
+      font-weight: 500;
+      color: var(--text-primary);
+      line-height: 1.4;
+    }
+
+    .event-detail {
+      font-size: 12px;
+      color: var(--text-secondary);
+      margin-top: 2px;
+      line-height: 1.45;
+    }
+
+    .event-time {
+      font-size: 12px;
+      color: #6A7488;
+      white-space: nowrap;
+      padding-top: 1px;
+    }
+
+    .home-chart-card {
+      display: grid;
+    }
+
+    .home-chart-card canvas {
+      max-height: 210px !important;
+    }
+
+    .recent-applied-row {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 0;
+      border-top: 0.5px solid #EEEEEE;
+    }
+
+    .recent-application-card {
+      padding: 14px 16px 12px;
+      border-right: 0.5px solid #EEEEEE;
+      min-height: 118px;
+      display: grid;
+      align-content: start;
+      gap: 8px;
+      background: #FFFFFF;
+    }
+
+    .recent-application-card:last-child {
+      border-right: none;
+    }
+
+    .status-pill {
+      display: inline-flex;
+      align-items: center;
+      padding: 4px 10px;
+      border-radius: 999px;
+      font-size: 11px;
+      font-weight: 500;
+      width: fit-content;
+    }
+
+    .status-pill.applied {
+      background: rgba(199, 133, 51, 0.14);
+      color: #AE6F1F;
+    }
+
+    .status-pill.received {
+      background: rgba(123, 170, 84, 0.16);
+      color: #6E9441;
+    }
+
+    .status-pill.review,
+    .status-pill.interview {
+      background: rgba(90, 141, 225, 0.14);
+      color: #4674C1;
+    }
+
+    .home-stats-grid .stat-card:nth-child(1) {
+      background: #F8F3E8;
+      border-color: #ECDDBA;
+    }
+
+    .home-stats-grid .stat-card:nth-child(2) {
+      background: #EEF4FF;
+      border-color: #D5E0F8;
+    }
+
+    .home-stats-grid .stat-card:nth-child(3) {
+      background: #EEF6F1;
+      border-color: #D6E6DD;
+    }
+
+    .home-shell .card {
+      box-shadow: 0 1px 0 rgba(26, 26, 26, 0.02);
+    }
+
+    .home-emphasis-card {
+      border: 1px solid #E5E8EE;
+      border-radius: 14px;
+      background: #FFFFFF;
+      padding: 1.15rem 1.25rem;
+    }
+
+    @media (max-width: 1100px) {
+      .home-main-grid {
+        grid-template-columns: 1fr;
+      }
+
+      .recent-applied-row {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+    }
+
+    @media (max-width: 760px) {
+      .home-hero {
+        flex-direction: column;
+      }
+
+      .home-stats-grid,
+      .countdown-grid,
+      .recent-applied-row {
+        grid-template-columns: 1fr;
+      }
+
+      .recent-application-card {
+        border-right: none;
+        border-bottom: 0.5px solid #EEEEEE;
+      }
+
+      .recent-application-card:last-child {
+        border-bottom: none;
+      }
     }
 
     /* ── Action Cards (Home) ── */
@@ -1081,7 +1376,7 @@ export default function DashboardClient({
 
     .card-title {
       font-family: 'Playfair Display', serif;
-      font-size: 24px;
+      font-size: 26px;
       font-weight: 500;
       color: var(--text-primary);
       margin-bottom: 12px;
@@ -1089,7 +1384,7 @@ export default function DashboardClient({
     }
 
     .card-body {
-      font-size: 13.5px;
+      font-size: 14.5px;
       color: var(--text-secondary);
       line-height: 1.7;
       margin-bottom: 24px;
@@ -1106,7 +1401,7 @@ export default function DashboardClient({
       border: none;
       border-radius: 8px;
       font-family: 'DM Sans', sans-serif;
-      font-size: 13.5px;
+      font-size: 14.5px;
       font-weight: 500;
       cursor: pointer;
       transition: all 0.2s ease;
@@ -1136,7 +1431,7 @@ export default function DashboardClient({
       border: 0.5px solid var(--gold);
       border-radius: 8px;
       font-family: 'DM Sans', sans-serif;
-      font-size: 13px;
+      font-size: 14px;
       font-weight: 400;
       cursor: pointer;
       transition: all 0.2s ease;
@@ -1159,7 +1454,7 @@ export default function DashboardClient({
       border: 0.5px solid var(--gold);
       border-radius: 8px;
       font-family: 'DM Sans', sans-serif;
-      font-size: 13px;
+      font-size: 14px;
       font-weight: 400;
       cursor: pointer;
       transition: all 0.2s ease;
@@ -1207,7 +1502,7 @@ export default function DashboardClient({
 
     .field-label {
       font-family: 'DM Mono', monospace;
-      font-size: 10px;
+      font-size: 11px;
       letter-spacing: 0.1em;
       text-transform: uppercase;
       color: var(--text-muted);
@@ -1222,7 +1517,7 @@ export default function DashboardClient({
       padding: 12px 16px;
       color: var(--text-primary);
       font-family: 'DM Sans', sans-serif;
-      font-size: 14px;
+      font-size: 15px;
       font-weight: 400;
       outline: none;
       transition: border-color 0.2s ease;
@@ -1747,6 +2042,27 @@ export default function DashboardClient({
       gap: 12px;
     }
 
+    .ops-list-scroll {
+      max-height: 470px;
+      overflow-y: auto;
+      padding-right: 6px;
+      align-content: start;
+    }
+
+    .ops-list-scroll::-webkit-scrollbar {
+      width: 8px;
+    }
+
+    .ops-list-scroll::-webkit-scrollbar-thumb {
+      background: rgba(61, 107, 94, 0.18);
+      border-radius: 999px;
+    }
+
+    .ops-list-scroll::-webkit-scrollbar-track {
+      background: rgba(61, 107, 94, 0.05);
+      border-radius: 999px;
+    }
+
     .ops-item {
       border: 0.5px solid #EEEEEE;
       border-radius: 10px;
@@ -1764,19 +2080,19 @@ export default function DashboardClient({
     }
 
     .ops-item-title {
-      font-size: 14px;
+      font-size: 15px;
       font-weight: 500;
       color: var(--text-primary);
     }
 
     .ops-item-meta {
-      font-size: 12px;
+      font-size: 13px;
       color: var(--text-secondary);
       line-height: 1.5;
     }
 
     .ops-item-notes {
-      font-size: 12px;
+      font-size: 13px;
       color: var(--text-secondary);
       line-height: 1.6;
     }
@@ -1786,7 +2102,7 @@ export default function DashboardClient({
       align-items: center;
       padding: 4px 9px;
       border-radius: 999px;
-      font-size: 11px;
+      font-size: 12px;
       font-weight: 500;
       border: 0.5px solid var(--border);
       background: #ffffff;
@@ -1835,7 +2151,7 @@ export default function DashboardClient({
     }
 
     .ops-kpi strong {
-      font-size: 24px;
+      font-size: 28px;
       font-weight: 500;
       color: var(--text-primary);
     }
@@ -1892,7 +2208,7 @@ export default function DashboardClient({
       border: 0.5px solid var(--border);
       border-radius: 8px;
       padding: 8px 10px;
-      font-size: 12px;
+      font-size: 13px;
       color: var(--text-primary);
       background: #ffffff;
     }
@@ -1952,7 +2268,7 @@ export default function DashboardClient({
     }
 
     .week-day-label {
-      font-size: 12px;
+      font-size: 13px;
       font-weight: 500;
       color: var(--text-primary);
       border-bottom: 0.5px solid #EEEEEE;
@@ -1962,7 +2278,7 @@ export default function DashboardClient({
     .event-pill {
       border-radius: 8px;
       padding: 9px 10px;
-      font-size: 11px;
+      font-size: 12px;
       line-height: 1.5;
       border-left: 3px solid var(--gold);
       background: #FCFCFA;
@@ -1996,13 +2312,13 @@ export default function DashboardClient({
     }
 
     .focus-item strong {
-      font-size: 13px;
+      font-size: 14px;
       font-weight: 500;
       color: var(--text-primary);
     }
 
     .focus-item span {
-      font-size: 11px;
+      font-size: 12px;
       color: var(--text-secondary);
     }
   `;
@@ -2117,219 +2433,171 @@ export default function DashboardClient({
           {/* ── HOME ── */}
           {mode === "home" && (
             <div className="section-fade">
-              <header className="header">
-                <p className="header-eyebrow">Career Command Center</p>
-                <h1 className="header-title">
-                  Track the jobs you <em>actually</em> applied to.
-                </h1>
-                <p className="header-sub">
-                  Log applications, sync to Google Sheets, and tailor your resume to each role — all from one place.
-                </p>
-              </header>
-
-              <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 10, padding: "0 28px 16px" }}>
-                <div className="stat-card">
-                  <p className="stat-label">Applied YTD</p>
-                  <p className="stat-value">{data?.tracker_stats.applied_ytd ?? 0}</p>
-                  <div className="stat-accent-line" />
-                  <p className="stat-desc">total applications logged</p>
-                </div>
-                <div className="stat-card">
-                  <p className="stat-label">Today</p>
-                  <p className="stat-value">{data?.tracker_stats.applied_today ?? 0}</p>
-                  <div className="stat-accent-line" />
-                  <p className="stat-desc">applications this session</p>
-                </div>
-                <div className="stat-card">
-                  <p className="stat-label">Status</p>
-                  <p className="stat-value" style={{ fontSize: 28, paddingTop: 10, color: data ? "var(--gold)" : "var(--text-primary)", fontWeight: 500 }}>
-                    <span style={{ display: "inline-block", paddingBottom: 4, borderBottom: data ? "1.5px solid var(--gold)" : "none" }}>
-                      {data ? "Live" : "—"}
-                    </span>
-                  </p>
-                  {!data && <div className="stat-accent-line" />}
-                  <p className="stat-desc">backend connection</p>
-                </div>
-              </div>
-
-              <div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0,1fr))", gap: 10, padding: "0 28px 16px" }}>
-                <JobTypePieChart jobs={recentJobs} />
-                <WeeklyActivityChart jobs={recentJobs} />
-                <div style={{ background: "var(--ink-2)", border: "0.5px solid var(--border)", borderRadius: 10, padding: "1rem 1.25rem", boxShadow: "none" }}>
-                  <p style={{ fontSize: 10, letterSpacing: "0.1em", textTransform: "uppercase", color: "var(--text-muted)", marginBottom: 14 }}>Recently applied</p>
-                  <div style={{ display: "flex", flexDirection: "column" }}>
-                    {recentJobs.slice(0, 4).map((job, i) => (
-                      <div key={`${job.title}-${job.company}-${i}`} style={{ padding: "10px 0", borderBottom: i < Math.min(recentJobs.length, 4) - 1 ? "0.5px solid #EEEEEE" : "none" }}>
-                        <div className="recent-title-row">
-                          <span className="recent-dot" />
-                          <div style={{ fontSize: 13, color: "var(--text-primary)", fontWeight: 500 }}>{job.title}</div>
-                        </div>
-                        <div style={{ fontSize: 11, color: "var(--text-secondary)", marginTop: 2, paddingLeft: 14 }}>{job.company}{job.location ? ` · ${job.location}` : ""}</div>
-                      </div>
-                    ))}
-                    {!recentJobs.length && (
-                      <p className="empty-state">No tracked applications yet.</p>
-                    )}
+              <div className="home-shell">
+                <div className="home-hero">
+                  <div>
+                    <div className="home-hero-title">Good evening, Talha</div>
+                    <div className="home-hero-sub">
+                      {greetingLine} · {data?.tracker_stats.applied_ytd ?? 0} applications tracked
+                    </div>
                   </div>
-                </div>
-              </div>
-
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20, padding: "0 28px 16px" }}>
-                <div className="card">
-                  <p className="card-eyebrow">Primary Workflow</p>
-                  <h2 className="card-title">Log a job you applied to</h2>
-                  <p className="card-body">
-                    Paste any job link after you apply. The tracker saves the posting details, pushes the entry to your Google Sheet, and can generate a tailored resume draft if you provide your resume.
-                  </p>
-                  <div className="btn-row">
+                  <div style={{ display: "flex", gap: 10, flexWrap: "wrap", justifyContent: "flex-end" }}>
+                    <span className="home-live-pill">{data ? "Live" : "Offline"}</span>
                     <button className="btn-primary" onClick={() => setMode("job-tracker")}>
                       Open Job Tracker {iconArrow}
                     </button>
                   </div>
                 </div>
 
-                <div className="card">
-                  <p className="card-eyebrow">Legacy Workspace</p>
-                  <h2 className="card-title" style={{ color: "var(--text-secondary)" }}>ATS Tools</h2>
-                  <p className="card-body">
-                    ATS keyword parser, seeded job matcher, and Gmail monitor
-                  </p>
-                  <div className="btn-row">
-                    <button className="btn-ghost" onClick={() => setMode("job-search")}>
-                      Open Job Search {iconArrow}
-                    </button>
+                <div className="home-stats-grid">
+                  <div className="stat-card">
+                    <p className="stat-label">Applied YTD</p>
+                    <p className="stat-value">{data?.tracker_stats.applied_ytd ?? 0}</p>
+                    <p className="stat-desc">{(data?.tracker_stats.applied_today ?? 0) > 0 ? `+${data?.tracker_stats.applied_today ?? 0} today` : "No new applications today"}</p>
+                  </div>
+                  <div className="stat-card">
+                    <p className="stat-label">Response Rate</p>
+                    <p className="stat-value">{responseRate}%</p>
+                    <p className="stat-desc">{respondedOpportunities.length} replies received</p>
+                  </div>
+                  <div className="stat-card">
+                    <p className="stat-label">In Review</p>
+                    <p className="stat-value">{activeProcessesCount}</p>
+                    <p className="stat-desc">active processes</p>
                   </div>
                 </div>
-              </div>
 
-              <div style={{ display: "grid", gridTemplateColumns: "1.2fr 0.8fr", gap: 20, padding: "0 28px 16px" }}>
-                <div className="card">
-                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 16, marginBottom: 12 }}>
-                    <p className="card-eyebrow" style={{ marginBottom: 0 }}>Recent Status Updates</p>
-                    {data?.gmail_connection ? (
-                      <button
-                        className="btn-ghost"
-                        onClick={() => startTransition(() => { void handleCheckGmail(); })}
-                      >
-                        {iconMail} Check Gmail Now
-                      </button>
-                    ) : (
-                      <a href={`${API_BASE}/gmail/connect`} className="btn-ghost">
-                        Connect Gmail {iconArrow}
-                      </a>
-                    )}
+                <div className="home-main-grid">
+                  <div className="home-left-stack">
+                    <div className="card spotlight-card">
+                      <p className="spotlight-kicker">Next call</p>
+                      {nextCalendarEvent ? (
+                        <>
+                          <div className="spotlight-title">
+                            {nextCalendarEvent.role} — {nextCalendarEvent.company}
+                          </div>
+                          <div className="spotlight-meta">
+                            {nextCalendarEvent.location || nextCalendarEvent.type} · {formatShortDateTime(nextCalendarEvent.startsAt)}
+                          </div>
+                          <div className="countdown-grid">
+                            <div className="countdown-box">
+                              <div className="countdown-value">{String(nextCalendarCountdown.days).padStart(2, "0")}</div>
+                              <div className="countdown-label">Days</div>
+                            </div>
+                            <div className="countdown-box">
+                              <div className="countdown-value">{String(nextCalendarCountdown.hours).padStart(2, "0")}</div>
+                              <div className="countdown-label">Hrs</div>
+                            </div>
+                            <div className="countdown-box">
+                              <div className="countdown-value">{String(nextCalendarCountdown.minutes).padStart(2, "0")}</div>
+                              <div className="countdown-label">Min</div>
+                            </div>
+                          </div>
+                        </>
+                      ) : (
+                        <>
+                          <div className="spotlight-title">No interview or call is scheduled yet</div>
+                          <div className="spotlight-meta">
+                            Use the Response Hub calendar to log the next recruiter call or interview so it stays visible here.
+                          </div>
+                          <div className="btn-row" style={{ marginTop: 18 }}>
+                            <button className="btn-ghost" onClick={() => setMode("ops-dashboard")}>
+                              Open Response Hub {iconArrow}
+                            </button>
+                          </div>
+                        </>
+                      )}
+                    </div>
+
+                    <div className="card home-emphasis-card">
+                      <p className="card-title" style={{ fontSize: 22, marginBottom: 16 }}>Upcoming events</p>
+                      <div className="event-list">
+                        {homeUpcomingEvents.length > 0 ? (
+                          homeUpcomingEvents.map((event) => (
+                            <div className="event-row" key={event.id}>
+                              <span className={`event-dot ${event.type === "Interview" ? "interview" : "call"}`} />
+                              <div>
+                                <div className="event-role">
+                                  {event.type === "Interview" ? "Interview" : "Phone screen"} — {event.company}
+                                </div>
+                                <div className="event-detail">
+                                  {event.role}
+                                  {event.location ? ` · ${event.location}` : ""}
+                                </div>
+                              </div>
+                              <div className="event-time">{formatWeekdayTime(event.startsAt)}</div>
+                            </div>
+                          ))
+                        ) : (
+                          <p className="empty-state">No upcoming recruiter calls or interviews yet.</p>
+                        )}
+                      </div>
+                    </div>
                   </div>
-                  <div style={{ display: "grid", gap: 10 }}>
-                    {recentStatusNotifications.length > 0 ? (
-                      recentStatusNotifications.map((update) => (
-                        <div
-                          key={`${update.id}-${update.job_id}`}
-                          style={{
-                            background: "#FFFFFF",
-                            borderRadius: 8,
-                            padding: "12px 14px",
-                            border: "0.5px solid #EEEEEE",
-                            display: "grid",
-                            gap: 5,
-                          }}
+
+                  <div className="home-right-stack">
+                    <div className="home-chart-card">
+                      <JobTypePieChart jobs={recentJobs} />
+                    </div>
+                    <div className="home-chart-card">
+                      <WeeklyActivityChart jobs={recentJobs} />
+                    </div>
+                  </div>
+                </div>
+
+                <div className="card home-emphasis-card">
+                  <div className="section-header" style={{ marginBottom: 10 }}>
+                    <div>
+                      <p className="card-title" style={{ fontSize: 22, marginBottom: 0 }}>Recently applied</p>
+                    </div>
+                    <div className="btn-row">
+                      {data?.gmail_connection ? (
+                        <button
+                          className="btn-ghost"
+                          onClick={() => startTransition(() => { void handleCheckGmail(); })}
                         >
-                          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
-                            <div style={{ fontSize: 13, color: "var(--text-primary)", fontWeight: 500 }}>
-                              {update.title} · {update.company}
-                            </div>
-                            <div style={{ fontSize: 11, color: "var(--gold)" }}>
-                              {update.old_status} → {update.new_status}
-                            </div>
-                          </div>
-                          <div style={{ fontSize: 11, color: "var(--text-secondary)" }}>
-                            {update.email_snippet || update.email_subject}
-                          </div>
-                          <div style={{ fontSize: 10, color: "var(--text-muted)" }}>
-                            {update.observed_at}
-                          </div>
-                        </div>
-                      ))
-                    ) : (
-                      <p className="empty-state">No Gmail-driven status changes yet.</p>
-                    )}
+                          {iconMail} Check Gmail Now
+                        </button>
+                      ) : (
+                        <a href={`${API_BASE}/gmail/connect`} className="btn-ghost">
+                          Connect Gmail {iconArrow}
+                        </a>
+                      )}
+                      <button className="btn-ghost" onClick={() => setMode("ops-dashboard")}>
+                        Open Response Hub {iconArrow}
+                      </button>
+                    </div>
                   </div>
-                </div>
+                  {recentAppliedCards.length > 0 ? (
+                    <div className="recent-applied-row">
+                      {recentAppliedCards.map((job) => {
+                        const status = job.application?.status ?? "Applied";
+                        const statusClass =
+                          status === "Received"
+                            ? "received"
+                            : status === "In Review" || status === "Interview" || status === "Recruiter Screen" || status === "Final Round"
+                              ? "review"
+                              : status === "Assessment"
+                                ? "interview"
+                                : "applied";
 
-                <div className="card">
-                  <p className="card-eyebrow">Action Needed</p>
-                  <div style={{ display: "grid", gap: 10 }}>
-                    {actionableJobs.length > 0 ? (
-                      actionableJobs.slice(0, 6).map((job) => {
-                        const notification = latestNotificationByJob.get(job.id);
                         return (
-                          <div
-                            key={job.id}
-                            style={{
-                              background: "#FFFFFF",
-                              borderRadius: 8,
-                              padding: "12px 14px",
-                              border: "0.5px solid #EEEEEE",
-                              display: "grid",
-                              gap: 6,
-                            }}
-                          >
-                            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
-                              <div style={{ fontSize: 13, color: "var(--text-primary)", fontWeight: 500 }}>
-                                {job.title}
-                              </div>
-                              <div style={{ fontSize: 11, color: "var(--gold)" }}>
-                                {job.application?.status}
-                              </div>
-                            </div>
-                            <div style={{ fontSize: 11, color: "var(--text-secondary)" }}>
-                              {job.company}{job.location ? ` · ${job.location}` : ""}
-                            </div>
-                            <div style={{ fontSize: 11, color: "var(--text-muted)" }}>
-                              {notification?.email_snippet || notification?.email_subject || "Review the latest employer message for next steps."}
-                            </div>
+                          <div className="recent-application-card" key={job.id}>
+                            <span className={`status-pill ${statusClass}`}>{status}</span>
                             <div>
-                              <a href={job.job_url} target="_blank" rel="noreferrer" className="btn-ghost">
-                                Open Job {iconArrow}
-                              </a>
+                              <strong style={{ display: "block", fontSize: 14, lineHeight: 1.45 }}>{job.company}</strong>
+                              <p style={{ fontSize: 13, color: "var(--text-primary)", lineHeight: 1.5, marginTop: 4 }}>
+                                {job.title}
+                              </p>
                             </div>
                           </div>
                         );
-                      })
-                    ) : (
-                      <p className="empty-state">No active follow-up statuses right now.</p>
-                    )}
-                  </div>
-                </div>
-              </div>
-
-              <div style={{ padding: "0 28px 16px" }}>
-                <div className="card">
-                  <div className="section-header" style={{ marginBottom: 14 }}>
-                    <div>
-                      <p className="card-eyebrow" style={{ marginBottom: 6 }}>Today&apos;s Focus</p>
-                      <h2 className="card-title" style={{ marginBottom: 0 }}>Upcoming interviews, calls, and recruiter responses that still need your attention</h2>
+                      })}
                     </div>
-                    <button className="btn-ghost" onClick={() => setMode("ops-dashboard")}>
-                      Open Response Hub {iconArrow}
-                    </button>
-                  </div>
-                  <div className="focus-grid">
-                    {todaysFocus.length > 0 ? (
-                      todaysFocus.map((item) => (
-                        <div className="focus-item" key={`${item.kind}-${item.id}`}>
-                          <strong>{item.title}</strong>
-                          <span>{item.detail}</span>
-                        </div>
-                      ))
-                    ) : (
-                      <p className="empty-state">No urgent recruiter replies or upcoming interview items yet. Use the Response Hub to start tracking them.</p>
-                    )}
-                  </div>
+                  ) : (
+                    <p className="empty-state">No tracked applications yet.</p>
+                  )}
                 </div>
-              </div>
-
-              <div style={{ padding: "0 28px 20px", fontSize: 10, color: "var(--text-muted)", letterSpacing: "0.05em", textAlign: "center" }}>
-                CAREER COMMAND CENTER · v2
               </div>
             </div>
           )}
@@ -2359,9 +2627,9 @@ export default function DashboardClient({
                   <span className="ops-item-meta">moved beyond Applied</span>
                 </div>
                 <div className="ops-kpi">
-                  <p className="card-eyebrow" style={{ marginBottom: 0 }}>Need Your Schedule</p>
-                  <strong>{availabilityRequestedCount}</strong>
-                  <span className="ops-item-meta">asked for your availability</span>
+                  <p className="card-eyebrow" style={{ marginBottom: 0 }}>Offer Awaiting Reply</p>
+                  <strong>{offerAwaitingResponseCount}</strong>
+                  <span className="ops-item-meta">offers that still need your answer</span>
                 </div>
                 <div className="ops-kpi">
                   <p className="card-eyebrow" style={{ marginBottom: 0 }}>Scheduled</p>
@@ -2386,46 +2654,39 @@ export default function DashboardClient({
                 </div>
               ) : (
                 <div className="ops-grid">
-                  <div className="ops-layout">
-                    <div className="card">
-                      <p className="card-eyebrow">Quick Log</p>
-                      <h2 className="card-title">Company Response</h2>
-                      <form className="ops-form" onSubmit={addResponse}>
-                        <input className="field-input" placeholder="Company" value={responseDraft.company} onChange={(event) => setResponseDraft({ ...responseDraft, company: event.target.value })} />
-                        <input className="field-input" placeholder="Role" value={responseDraft.role} onChange={(event) => setResponseDraft({ ...responseDraft, role: event.target.value })} />
-                        <input className="field-input" placeholder="Recruiter / primary contact" value={responseDraft.recruiterName} onChange={(event) => setResponseDraft({ ...responseDraft, recruiterName: event.target.value })} />
-                        <select className="field-input" value={responseDraft.contactChannel} onChange={(event) => setResponseDraft({ ...responseDraft, contactChannel: event.target.value as ContactChannel })}>
-                          <option>LinkedIn</option>
-                          <option>Gmail</option>
-                          <option>Phone</option>
-                          <option>Other</option>
-                        </select>
-                        <input className="field-input" placeholder="Primary contact detail / handle" value={responseDraft.contactHandle} onChange={(event) => setResponseDraft({ ...responseDraft, contactHandle: event.target.value })} />
-                        <select className="field-input" value={responseDraft.status} onChange={(event) => setResponseDraft({ ...responseDraft, status: event.target.value as ResponseStatus })}>
-                          {RESPONSE_STATUSES.map((status) => <option key={status}>{status}</option>)}
-                        </select>
-                        <input className="field-input" type="date" value={responseDraft.lastUpdated} onChange={(event) => setResponseDraft({ ...responseDraft, lastUpdated: event.target.value })} />
-                        <textarea className="field-textarea" placeholder="Notes: what they asked for, what you sent, or where the conversation stands" value={responseDraft.notes} onChange={(event) => setResponseDraft({ ...responseDraft, notes: event.target.value })} />
-                        <button className="btn-primary" type="submit">Save Response</button>
-                      </form>
-                    </div>
-
-                    <div className="card">
-                      <p className="card-eyebrow">Quick Log</p>
-                      <h2 className="card-title">Interview or Call</h2>
-                      <form className="ops-form" onSubmit={addCalendarEvent}>
-                        <input className="field-input" placeholder="Company" value={calendarDraft.company} onChange={(event) => setCalendarDraft({ ...calendarDraft, company: event.target.value })} />
-                        <input className="field-input" placeholder="Role" value={calendarDraft.role} onChange={(event) => setCalendarDraft({ ...calendarDraft, role: event.target.value })} />
-                        <input className="field-input" placeholder="Recruiter / point of contact" value={calendarDraft.recruiterName} onChange={(event) => setCalendarDraft({ ...calendarDraft, recruiterName: event.target.value })} />
-                        <select className="field-input" value={calendarDraft.type} onChange={(event) => setCalendarDraft({ ...calendarDraft, type: event.target.value as CalendarEventType })}>
-                          {CALENDAR_EVENT_TYPES.map((type) => <option key={type}>{type}</option>)}
-                        </select>
-                        <input className="field-input" type="datetime-local" value={calendarDraft.startsAt} onChange={(event) => setCalendarDraft({ ...calendarDraft, startsAt: event.target.value })} />
-                        <input className="field-input" placeholder="Zoom / phone / location" value={calendarDraft.location} onChange={(event) => setCalendarDraft({ ...calendarDraft, location: event.target.value })} />
-                        <textarea className="field-textarea" placeholder="Anything you need to remember before the event" value={calendarDraft.notes} onChange={(event) => setCalendarDraft({ ...calendarDraft, notes: event.target.value })} />
-                        <button className="btn-primary" type="submit">Add Event</button>
-                      </form>
-                    </div>
+                  <div className="card">
+                    <p className="card-eyebrow">Quick Log</p>
+                    <h2 className="card-title">Company Action</h2>
+                    <p className="card-body" style={{ marginBottom: 16 }}>
+                      Log the recruiter status here, and if they already gave you a time, add it below so the calendar and scheduled count update together.
+                    </p>
+                    <form className="ops-form" onSubmit={addResponse}>
+                      <input className="field-input" placeholder="Company" value={responseDraft.company} onChange={(event) => setResponseDraft({ ...responseDraft, company: event.target.value })} />
+                      <input className="field-input" placeholder="Role" value={responseDraft.role} onChange={(event) => setResponseDraft({ ...responseDraft, role: event.target.value })} />
+                      <input className="field-input" placeholder="Recruiter / primary contact" value={responseDraft.recruiterName} onChange={(event) => setResponseDraft({ ...responseDraft, recruiterName: event.target.value })} />
+                      <select className="field-input" value={responseDraft.contactChannel} onChange={(event) => setResponseDraft({ ...responseDraft, contactChannel: event.target.value as ContactChannel })}>
+                        <option>LinkedIn</option>
+                        <option>Gmail</option>
+                        <option>Phone</option>
+                        <option>Other</option>
+                      </select>
+                      <input className="field-input" placeholder="Primary contact detail / handle" value={responseDraft.contactHandle} onChange={(event) => setResponseDraft({ ...responseDraft, contactHandle: event.target.value })} />
+                      <select className="field-input" value={responseDraft.status} onChange={(event) => handleResponseStatusChange(event.target.value as ResponseStatus)}>
+                        {RESPONSE_STATUS_OPTIONS.map((status) => <option key={status.value} value={status.value}>{status.label}</option>)}
+                      </select>
+                      <p className="ops-item-meta" style={{ marginTop: -4 }}>
+                        Choose <strong style={{ color: "var(--text-primary)", fontWeight: 500 }}>Active Interview Process</strong> when the company has already replied and you are moving through interviews. Choose <strong style={{ color: "var(--text-primary)", fontWeight: 500 }}>Job Offer Awaiting Response</strong> when an offer is on the table and you still need to respond.
+                      </p>
+                      <input className="field-input" type="date" value={responseDraft.lastUpdated} onChange={(event) => setResponseDraft({ ...responseDraft, lastUpdated: event.target.value })} />
+                      {schedulingStatusSelected ? (
+                        <>
+                          <input className="field-input" type="datetime-local" value={responseDraft.startsAt} onChange={(event) => setResponseDraft({ ...responseDraft, startsAt: event.target.value })} />
+                          <input className="field-input" placeholder="Zoom / phone / location" value={responseDraft.location} onChange={(event) => setResponseDraft({ ...responseDraft, location: event.target.value })} />
+                        </>
+                      ) : null}
+                      <textarea className="field-textarea" placeholder="Notes: what they asked for, what you sent, what is scheduled, or where the conversation stands" value={responseDraft.notes} onChange={(event) => setResponseDraft({ ...responseDraft, notes: event.target.value })} />
+                      <button className="btn-primary" type="submit">Save Action</button>
+                    </form>
                   </div>
 
                   <div className="card">
@@ -2437,9 +2698,19 @@ export default function DashboardClient({
                           <div className="week-day-label">{day.label}</div>
                           {day.events.length > 0 ? day.events.map((event) => (
                             <div className={`event-pill ${event.type === "Interview" ? "interview" : "followup"}`} key={event.id}>
-                              <strong style={{ display: "block", color: "var(--text-primary)", fontSize: 11, fontWeight: 500 }}>
-                                {event.company} · {event.role}
-                              </strong>
+                              <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 8 }}>
+                                <strong style={{ display: "block", color: "var(--text-primary)", fontSize: 11, fontWeight: 500 }}>
+                                  {event.company} · {event.role}
+                                </strong>
+                                <button
+                                  type="button"
+                                  className="mini-select"
+                                  style={{ padding: "4px 8px", fontSize: 10 }}
+                                  onClick={() => deleteCalendarEvent(event.id)}
+                                >
+                                  Delete
+                                </button>
+                              </div>
                               <span>{event.type} · {formatShortDateTime(event.startsAt)}</span>
                               {event.recruiterName ? <span>{event.recruiterName}</span> : null}
                               {event.location ? <span>{event.location}</span> : null}
@@ -2455,9 +2726,9 @@ export default function DashboardClient({
                   <div className="ops-layout">
                     <div className="card">
                       <p className="card-eyebrow">Response Tracker</p>
-                      <h2 className="card-title">Need your availability</h2>
-                      <div className="ops-list">
-                        {groupedResponses.availabilityRequested.length > 0 ? groupedResponses.availabilityRequested.map((item) => (
+                      <h2 className="card-title">Job offer awaiting further response</h2>
+                      <div className="ops-list ops-list-scroll">
+                        {groupedResponses.offerAwaitingResponse.length > 0 ? groupedResponses.offerAwaitingResponse.map((item) => (
                           <div className="ops-item" key={item.id}>
                             <div className="ops-item-row">
                               <div>
@@ -2474,18 +2745,25 @@ export default function DashboardClient({
                                 value={item.status}
                                 onChange={(event) => updateResponseStatus(item.id, event.target.value as ResponseStatus)}
                               >
-                                {RESPONSE_STATUSES.map((status) => <option key={status}>{status}</option>)}
+                                {RESPONSE_STATUS_OPTIONS.map((status) => <option key={status.value} value={status.value}>{status.label}</option>)}
                               </select>
+                              <button
+                                type="button"
+                                className="mini-select"
+                                onClick={() => deleteResponse(item.id)}
+                              >
+                                Delete
+                              </button>
                             </div>
                           </div>
-                        )) : <p className="empty-state">No recruiters are waiting for your availability right now.</p>}
+                        )) : <p className="empty-state">No logged offers are waiting on your response right now.</p>}
                       </div>
                     </div>
 
                     <div className="card">
                       <p className="card-eyebrow">Response Tracker</p>
                       <h2 className="card-title">Interviews and calls already scheduled</h2>
-                      <div className="ops-list">
+                      <div className="ops-list ops-list-scroll">
                         {groupedResponses.scheduled.length > 0 ? (
                           groupedResponses.scheduled.map((item) => (
                             <div className="ops-item" key={item.id}>
@@ -2504,8 +2782,15 @@ export default function DashboardClient({
                                   value={item.status}
                                   onChange={(event) => updateResponseStatus(item.id, event.target.value as ResponseStatus)}
                                 >
-                                  {RESPONSE_STATUSES.map((status) => <option key={status}>{status}</option>)}
+                                  {RESPONSE_STATUS_OPTIONS.map((status) => <option key={status.value} value={status.value}>{status.label}</option>)}
                                 </select>
+                                <button
+                                  type="button"
+                                  className="mini-select"
+                                  onClick={() => deleteResponse(item.id)}
+                                >
+                                  Delete
+                                </button>
                               </div>
                             </div>
                           ))
@@ -2517,8 +2802,8 @@ export default function DashboardClient({
                   <div className="ops-layout">
                     <div className="card">
                       <p className="card-eyebrow">Response Tracker</p>
-                      <h2 className="card-title">Active conversations after the first reply</h2>
-                      <div className="ops-list">
+                      <h2 className="card-title">Active interview process</h2>
+                      <div className="ops-list ops-list-scroll">
                         {groupedResponses.interviewing.length > 0 ? groupedResponses.interviewing.map((item) => (
                           <div className="ops-item" key={item.id}>
                             <div className="ops-item-row">
@@ -2536,8 +2821,15 @@ export default function DashboardClient({
                                 value={item.status}
                                 onChange={(event) => updateResponseStatus(item.id, event.target.value as ResponseStatus)}
                               >
-                                {RESPONSE_STATUSES.map((status) => <option key={status}>{status}</option>)}
+                                {RESPONSE_STATUS_OPTIONS.map((status) => <option key={status.value} value={status.value}>{status.label}</option>)}
                               </select>
+                              <button
+                                type="button"
+                                className="mini-select"
+                                onClick={() => deleteResponse(item.id)}
+                              >
+                                Delete
+                              </button>
                             </div>
                           </div>
                         )) : <p className="empty-state">No opportunities are currently in the live interview process.</p>}
@@ -2547,7 +2839,7 @@ export default function DashboardClient({
                     <div className="card">
                       <p className="card-eyebrow">Response Tracker</p>
                       <h2 className="card-title">Waiting on recruiter reply</h2>
-                      <div className="ops-list">
+                      <div className="ops-list ops-list-scroll">
                         {groupedResponses.waiting.length > 0 ? groupedResponses.waiting.map((item) => (
                           <div className="ops-item" key={item.id}>
                             <div className="ops-item-row">
@@ -2565,8 +2857,15 @@ export default function DashboardClient({
                                 value={item.status}
                                 onChange={(event) => updateResponseStatus(item.id, event.target.value as ResponseStatus)}
                               >
-                                {RESPONSE_STATUSES.map((status) => <option key={status}>{status}</option>)}
+                                {RESPONSE_STATUS_OPTIONS.map((status) => <option key={status.value} value={status.value}>{status.label}</option>)}
                               </select>
+                              <button
+                                type="button"
+                                className="mini-select"
+                                onClick={() => deleteResponse(item.id)}
+                              >
+                                Delete
+                              </button>
                             </div>
                           </div>
                         )) : <p className="empty-state">No recruiter conversations are sitting in a wait state.</p>}
