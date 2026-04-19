@@ -138,7 +138,47 @@ type DashboardClientProps = {
   authMessage: string | null;
 };
 
-type ViewMode = "home" | "job-search" | "job-tracker";
+type ResponseStatus =
+  | "Awaiting Reply"
+  | "Availability Requested"
+  | "Interview Scheduled"
+  | "Interviewing"
+  | "Closed";
+type ContactChannel = "LinkedIn" | "Gmail" | "Phone" | "Other";
+type CalendarEventType = "Interview" | "Recruiter Call";
+
+type ResponseRecord = {
+  id: string;
+  company: string;
+  role: string;
+  recruiterName: string;
+  contactChannel: ContactChannel;
+  contactHandle: string;
+  status: ResponseStatus;
+  lastUpdated: string;
+  notes: string;
+};
+
+type CalendarEventRecord = {
+  id: string;
+  company: string;
+  role: string;
+  recruiterName: string;
+  type: CalendarEventType;
+  startsAt: string;
+  location: string;
+  notes: string;
+};
+
+type FocusItem = {
+  id: string;
+  kind: "response" | "calendar";
+  title: string;
+  detail: string;
+  priority: number;
+};
+
+type ViewMode = "home" | "job-search" | "job-tracker" | "ops-dashboard";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://127.0.0.1:5000";
 const SCORE_LABELS: Record<string, string> = {
@@ -149,6 +189,55 @@ const SCORE_LABELS: Record<string, string> = {
   location_fit: "Location",
   freshness_fit: "Freshness",
 };
+
+const RESPONSE_HUB_STORAGE_KEY = "career-command-center-response-hub";
+const RESPONSE_STATUSES: ResponseStatus[] = [
+  "Awaiting Reply",
+  "Availability Requested",
+  "Interview Scheduled",
+  "Interviewing",
+  "Closed",
+];
+const CALENDAR_EVENT_TYPES: CalendarEventType[] = ["Interview", "Recruiter Call"];
+
+function createLocalId() {
+  return `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function differenceInDays(dateLike: string) {
+  if (!dateLike) return 0;
+  const target = new Date(dateLike);
+  if (Number.isNaN(target.getTime())) return 0;
+  const now = new Date();
+  return Math.floor((now.getTime() - target.getTime()) / (1000 * 60 * 60 * 24));
+}
+
+function daysUntil(dateLike: string) {
+  if (!dateLike) return Number.POSITIVE_INFINITY;
+  const target = new Date(dateLike);
+  if (Number.isNaN(target.getTime())) return Number.POSITIVE_INFINITY;
+  const now = new Date();
+  return Math.ceil((target.getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
+}
+
+function formatShortDate(dateLike: string) {
+  if (!dateLike) return "Date not set";
+  const parsed = new Date(dateLike);
+  if (Number.isNaN(parsed.getTime())) return dateLike;
+  return parsed.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+}
+
+function formatShortDateTime(dateLike: string) {
+  if (!dateLike) return "Time not set";
+  const parsed = new Date(dateLike);
+  if (Number.isNaN(parsed.getTime())) return dateLike;
+  return parsed.toLocaleString(undefined, {
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  });
+}
 
 function JobTypePieChart({ jobs }: { jobs: { title: string }[] }) {
   const categorize = (title: string): string => {
@@ -270,6 +359,28 @@ export default function DashboardClient({
   const [tailoredResume, setTailoredResume] = useState<TailoredResume | null>(null);
   const [trackerPreview, setTrackerPreview] = useState<TrackerPreview | null>(null);
   const [confirmedJob, setConfirmedJob] = useState<TrackedJobDraft | null>(null);
+  const [responseHubLoaded, setResponseHubLoaded] = useState(false);
+  const [responses, setResponses] = useState<ResponseRecord[]>([]);
+  const [calendarEvents, setCalendarEvents] = useState<CalendarEventRecord[]>([]);
+  const [responseDraft, setResponseDraft] = useState({
+    company: "",
+    role: "",
+    recruiterName: "",
+    contactChannel: "LinkedIn" as ContactChannel,
+    contactHandle: "",
+    status: "Awaiting Reply" as ResponseStatus,
+    lastUpdated: new Date().toISOString().slice(0, 10),
+    notes: "",
+  });
+  const [calendarDraft, setCalendarDraft] = useState({
+    company: "",
+    role: "",
+    recruiterName: "",
+    type: "Interview" as CalendarEventType,
+    startsAt: "",
+    location: "",
+    notes: "",
+  });
   const [message, setMessage] = useState<string | null>(
     authLevel === "error" ? null : authMessage,
   );
@@ -295,6 +406,37 @@ export default function DashboardClient({
       void loadDashboard();
     });
   }, []);
+
+  useEffect(() => {
+    try {
+      const raw = window.localStorage.getItem(RESPONSE_HUB_STORAGE_KEY);
+      if (!raw) {
+        setResponseHubLoaded(true);
+        return;
+      }
+      const parsed = JSON.parse(raw) as {
+        responses?: ResponseRecord[];
+        calendarEvents?: CalendarEventRecord[];
+      };
+      setResponses(parsed.responses ?? []);
+      setCalendarEvents(parsed.calendarEvents ?? []);
+    } catch {
+      // Fall back to empty local state if stored data is malformed.
+    } finally {
+      setResponseHubLoaded(true);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!responseHubLoaded) return;
+    window.localStorage.setItem(
+      RESPONSE_HUB_STORAGE_KEY,
+      JSON.stringify({
+        responses,
+        calendarEvents,
+      }),
+    );
+  }, [responseHubLoaded, responses, calendarEvents]);
 
   async function handleResumeSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -491,6 +633,157 @@ export default function DashboardClient({
   const actionableJobs = sortedAppliedJobs.filter((job) =>
     actionableStatuses.has(job.application?.status ?? ""),
   );
+  const sortedResponses = [...responses].sort((left, right) => {
+    const rank = (status: ResponseStatus) => {
+      switch (status) {
+        case "Availability Requested":
+          return 0;
+        case "Interview Scheduled":
+          return 1;
+        case "Interviewing":
+          return 2;
+        case "Awaiting Reply":
+          return 3;
+        case "Closed":
+          return 4;
+      }
+    };
+    const ranked = rank(left.status) - rank(right.status);
+    if (ranked !== 0) return ranked;
+    return right.lastUpdated.localeCompare(left.lastUpdated);
+  });
+  const sortedCalendarEvents = [...calendarEvents].sort((left, right) => left.startsAt.localeCompare(right.startsAt));
+
+  const calendarDays = Array.from({ length: 7 }, (_, index) => {
+    const base = new Date();
+    base.setHours(0, 0, 0, 0);
+    base.setDate(base.getDate() + index);
+    const dayKey = base.toISOString().slice(0, 10);
+    return {
+      dayKey,
+      label: base.toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" }),
+      isToday: index === 0,
+      events: sortedCalendarEvents.filter((event) => event.startsAt.slice(0, 10) === dayKey),
+    };
+  });
+
+  const todaysFocus = [
+    ...sortedCalendarEvents
+      .filter((item) => daysUntil(item.startsAt) <= 7)
+      .map<FocusItem>((item) => ({
+        id: item.id,
+        kind: "calendar",
+        title: `${item.company} · ${item.type}`,
+        detail: `${item.company} · ${formatShortDateTime(item.startsAt)}`,
+        priority: daysUntil(item.startsAt) <= 1 ? 0 : 2,
+      })),
+    ...sortedResponses
+      .filter((item) => item.status !== "Closed")
+      .map<FocusItem>((item) => ({
+        id: item.id,
+        kind: "response",
+        title: `${item.company} · ${item.role}`,
+        detail:
+          item.status === "Availability Requested"
+            ? `${item.recruiterName || "Recruiter"} needs your schedule`
+            : item.status === "Interview Scheduled"
+              ? `${item.contactChannel} · interview scheduled`
+              : item.status === "Interviewing"
+                ? `${item.contactChannel} · active interview process`
+                : `${item.contactChannel} · waiting for recruiter reply`,
+        priority:
+          item.status === "Availability Requested"
+            ? 0
+            : item.status === "Interview Scheduled"
+              ? 1
+              : item.status === "Interviewing"
+                ? 1
+                : differenceInDays(item.lastUpdated) >= 3
+                  ? 2
+                  : 3,
+      })),
+  ]
+    .sort((left, right) => left.priority - right.priority)
+    .slice(0, 8);
+
+  const respondedOpportunities = responses.filter((item) => item.status !== "Awaiting Reply" && item.status !== "Closed");
+  const availabilityRequestedCount = responses.filter((item) => item.status === "Availability Requested").length;
+  const scheduledCount = responses.filter((item) => item.status === "Interview Scheduled").length;
+  const waitingReplyCount = responses.filter((item) => item.status === "Awaiting Reply").length;
+  const interviewingCount = responses.filter((item) => item.status === "Interviewing").length;
+  const groupedResponses = {
+    availabilityRequested: sortedResponses.filter((item) => item.status === "Availability Requested"),
+    scheduled: sortedResponses.filter((item) => item.status === "Interview Scheduled"),
+    interviewing: sortedResponses.filter((item) => item.status === "Interviewing"),
+    waiting: sortedResponses.filter((item) => item.status === "Awaiting Reply"),
+  };
+
+  function updateResponseStatus(id: string, status: ResponseStatus) {
+    setResponses((current) =>
+      current.map((record) =>
+        record.id === id
+          ? {
+              ...record,
+              status,
+              lastUpdated: new Date().toISOString().slice(0, 10),
+            }
+          : record,
+      ),
+    );
+  }
+
+  function addResponse(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!responseDraft.company.trim() || !responseDraft.role.trim()) return;
+    setResponses((current) => [
+      {
+        id: createLocalId(),
+        ...responseDraft,
+        company: responseDraft.company.trim(),
+        role: responseDraft.role.trim(),
+        recruiterName: responseDraft.recruiterName.trim(),
+        contactHandle: responseDraft.contactHandle.trim(),
+        notes: responseDraft.notes.trim(),
+      },
+      ...current,
+    ]);
+    setResponseDraft({
+      company: "",
+      role: "",
+      recruiterName: "",
+      contactChannel: "LinkedIn",
+      contactHandle: "",
+      status: "Awaiting Reply",
+      lastUpdated: new Date().toISOString().slice(0, 10),
+      notes: "",
+    });
+  }
+
+  function addCalendarEvent(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!calendarDraft.company.trim() || !calendarDraft.role.trim() || !calendarDraft.startsAt) return;
+    setCalendarEvents((current) => [
+      {
+        id: createLocalId(),
+        ...calendarDraft,
+        company: calendarDraft.company.trim(),
+        role: calendarDraft.role.trim(),
+        recruiterName: calendarDraft.recruiterName.trim(),
+        location: calendarDraft.location.trim(),
+        notes: calendarDraft.notes.trim(),
+      },
+      ...current,
+    ]);
+    setCalendarDraft({
+      company: "",
+      role: "",
+      recruiterName: "",
+      type: "Interview",
+      startsAt: "",
+      location: "",
+      notes: "",
+    });
+  }
 
   const styles = `
     @import url('https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400;0,500;0,600;1,400&family=DM+Sans:wght@300;400;500&family=DM+Mono:wght@400;500&display=swap');
@@ -1400,6 +1693,318 @@ export default function DashboardClient({
       color: var(--text-secondary);
       margin-bottom: 16px;
     }
+
+    .ops-tabs {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin-bottom: 20px;
+    }
+
+    .ops-tab {
+      border: 0.5px solid var(--border);
+      background: #ffffff;
+      color: var(--text-secondary);
+      border-radius: 8px;
+      padding: 10px 14px;
+      font-size: 12px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: all 0.18s ease;
+    }
+
+    .ops-tab.active {
+      border-color: var(--gold);
+      background: rgba(61, 107, 94, 0.06);
+      color: var(--gold);
+    }
+
+    .ops-grid {
+      display: grid;
+      gap: 20px;
+    }
+
+    .ops-layout {
+      display: grid;
+      grid-template-columns: minmax(280px, 0.75fr) minmax(0, 1.25fr);
+      gap: 20px;
+      align-items: start;
+    }
+
+    @media (max-width: 1100px) {
+      .ops-layout {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    .ops-form {
+      display: grid;
+      gap: 12px;
+    }
+
+    .ops-list {
+      display: grid;
+      gap: 12px;
+    }
+
+    .ops-item {
+      border: 0.5px solid #EEEEEE;
+      border-radius: 10px;
+      padding: 14px 16px;
+      background: #ffffff;
+      display: grid;
+      gap: 8px;
+    }
+
+    .ops-item-row {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 12px;
+    }
+
+    .ops-item-title {
+      font-size: 14px;
+      font-weight: 500;
+      color: var(--text-primary);
+    }
+
+    .ops-item-meta {
+      font-size: 12px;
+      color: var(--text-secondary);
+      line-height: 1.5;
+    }
+
+    .ops-item-notes {
+      font-size: 12px;
+      color: var(--text-secondary);
+      line-height: 1.6;
+    }
+
+    .ops-chip {
+      display: inline-flex;
+      align-items: center;
+      padding: 4px 9px;
+      border-radius: 999px;
+      font-size: 11px;
+      font-weight: 500;
+      border: 0.5px solid var(--border);
+      background: #ffffff;
+      color: var(--text-secondary);
+      white-space: nowrap;
+    }
+
+    .ops-chip.sage {
+      border-color: rgba(61, 107, 94, 0.24);
+      color: var(--gold);
+      background: rgba(61, 107, 94, 0.06);
+    }
+
+    .ops-chip.warn {
+      border-color: rgba(140, 90, 90, 0.18);
+      color: #8C5A5A;
+      background: rgba(140, 90, 90, 0.06);
+    }
+
+    .ops-chip.done {
+      border-color: rgba(61, 107, 94, 0.18);
+      color: #2f8a72;
+      background: rgba(47, 138, 114, 0.06);
+    }
+
+    .ops-kpi-grid {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 14px;
+      margin-bottom: 20px;
+    }
+
+    @media (max-width: 980px) {
+      .ops-kpi-grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+    }
+
+    .ops-kpi {
+      border: 0.5px solid var(--border);
+      border-radius: 10px;
+      padding: 14px 16px;
+      background: #ffffff;
+      display: grid;
+      gap: 6px;
+    }
+
+    .ops-kpi strong {
+      font-size: 24px;
+      font-weight: 500;
+      color: var(--text-primary);
+    }
+
+    .ops-board {
+      display: grid;
+      grid-template-columns: repeat(6, minmax(180px, 1fr));
+      gap: 14px;
+      overflow-x: auto;
+      padding-bottom: 4px;
+    }
+
+    .ops-column {
+      border: 0.5px solid var(--border);
+      border-radius: 10px;
+      background: #ffffff;
+      padding: 12px;
+      min-height: 260px;
+      display: grid;
+      gap: 10px;
+      align-content: start;
+    }
+
+    .ops-column-header {
+      font-size: 12px;
+      font-weight: 500;
+      color: var(--text-primary);
+      border-bottom: 0.5px solid #EEEEEE;
+      padding-bottom: 8px;
+    }
+
+    .ops-stage-card {
+      border: 0.5px solid #EEEEEE;
+      border-radius: 10px;
+      padding: 12px;
+      background: #ffffff;
+      display: grid;
+      gap: 8px;
+      cursor: grab;
+    }
+
+    .ops-stage-card:active {
+      cursor: grabbing;
+    }
+
+    .ops-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      align-items: center;
+    }
+
+    .mini-select {
+      border: 0.5px solid var(--border);
+      border-radius: 8px;
+      padding: 8px 10px;
+      font-size: 12px;
+      color: var(--text-primary);
+      background: #ffffff;
+    }
+
+    .task-row {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 14px;
+      border: 0.5px solid #EEEEEE;
+      border-radius: 10px;
+      padding: 14px 16px;
+      background: #ffffff;
+    }
+
+    .task-row.overdue {
+      border-color: rgba(140, 90, 90, 0.24);
+    }
+
+    .task-row.soon {
+      border-color: rgba(61, 107, 94, 0.24);
+    }
+
+    .task-check {
+      width: 18px;
+      height: 18px;
+      accent-color: var(--gold);
+      margin-top: 2px;
+    }
+
+    .week-grid {
+      display: grid;
+      grid-template-columns: repeat(7, minmax(0, 1fr));
+      gap: 12px;
+    }
+
+    @media (max-width: 980px) {
+      .week-grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+    }
+
+    .week-day {
+      border: 0.5px solid var(--border);
+      border-radius: 10px;
+      background: #ffffff;
+      padding: 12px;
+      display: grid;
+      gap: 10px;
+      min-height: 180px;
+      align-content: start;
+    }
+
+    .week-day.today {
+      border-color: var(--gold);
+      background: rgba(61, 107, 94, 0.04);
+    }
+
+    .week-day-label {
+      font-size: 12px;
+      font-weight: 500;
+      color: var(--text-primary);
+      border-bottom: 0.5px solid #EEEEEE;
+      padding-bottom: 8px;
+    }
+
+    .event-pill {
+      border-radius: 8px;
+      padding: 9px 10px;
+      font-size: 11px;
+      line-height: 1.5;
+      border-left: 3px solid var(--gold);
+      background: #FCFCFA;
+      color: var(--text-secondary);
+    }
+
+    .event-pill.interview {
+      border-left-color: #6A9E92;
+    }
+
+    .event-pill.assessment {
+      border-left-color: #C09A4B;
+    }
+
+    .event-pill.followup {
+      border-left-color: var(--gold);
+    }
+
+    .focus-grid {
+      display: grid;
+      gap: 10px;
+    }
+
+    .focus-item {
+      border: 0.5px solid #EEEEEE;
+      border-radius: 10px;
+      padding: 12px 14px;
+      background: #ffffff;
+      display: grid;
+      gap: 5px;
+    }
+
+    .focus-item strong {
+      font-size: 13px;
+      font-weight: 500;
+      color: var(--text-primary);
+    }
+
+    .focus-item span {
+      font-size: 11px;
+      color: var(--text-secondary);
+    }
   `;
 
   const iconHome = (
@@ -1417,6 +2022,12 @@ export default function DashboardClient({
   const iconSearch = (
     <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
       <circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/>
+    </svg>
+  );
+
+  const iconOps = (
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+      <rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 8h10M7 12h6M7 16h8"/>
     </svg>
   );
 
@@ -1477,6 +2088,13 @@ export default function DashboardClient({
           >
             {iconSearch}
             <span className="nav-tooltip">Job Search</span>
+          </button>
+          <button
+            className={`nav-btn ${mode === "ops-dashboard" ? "active" : ""}`}
+            onClick={() => setMode("ops-dashboard")}
+          >
+            {iconOps}
+            <span className="nav-tooltip">Response Hub</span>
           </button>
         </nav>
 
@@ -1684,9 +2302,279 @@ export default function DashboardClient({
                 </div>
               </div>
 
+              <div style={{ padding: "0 28px 16px" }}>
+                <div className="card">
+                  <div className="section-header" style={{ marginBottom: 14 }}>
+                    <div>
+                      <p className="card-eyebrow" style={{ marginBottom: 6 }}>Today&apos;s Focus</p>
+                      <h2 className="card-title" style={{ marginBottom: 0 }}>Upcoming interviews, calls, and recruiter responses that still need your attention</h2>
+                    </div>
+                    <button className="btn-ghost" onClick={() => setMode("ops-dashboard")}>
+                      Open Response Hub {iconArrow}
+                    </button>
+                  </div>
+                  <div className="focus-grid">
+                    {todaysFocus.length > 0 ? (
+                      todaysFocus.map((item) => (
+                        <div className="focus-item" key={`${item.kind}-${item.id}`}>
+                          <strong>{item.title}</strong>
+                          <span>{item.detail}</span>
+                        </div>
+                      ))
+                    ) : (
+                      <p className="empty-state">No urgent recruiter replies or upcoming interview items yet. Use the Response Hub to start tracking them.</p>
+                    )}
+                  </div>
+                </div>
+              </div>
+
               <div style={{ padding: "0 28px 20px", fontSize: 10, color: "var(--text-muted)", letterSpacing: "0.05em", textAlign: "center" }}>
                 CAREER COMMAND CENTER · v2
               </div>
+            </div>
+          )}
+
+          {/* ── OPS DASHBOARD ── */}
+          {mode === "ops-dashboard" && (
+            <div className="section-fade">
+              <div className="section-header">
+                <div>
+                  <p className="header-eyebrow">Response Hub</p>
+                  <h1 style={{ fontFamily: "'Playfair Display', serif", fontSize: 34, fontWeight: 500, lineHeight: 1.2 }}>
+                    See who replied, what they need, and when you need to show up
+                  </h1>
+                  <p className="header-sub" style={{ marginTop: 10 }}>
+                    Keep recruiter responses visible, track the primary contact channel, and place interviews or calls on a weekly calendar so nothing gets missed.
+                  </p>
+                </div>
+                <button className="btn-ghost" onClick={() => setMode("home")}>
+                  {iconBack} Back
+                </button>
+              </div>
+
+              <div className="ops-kpi-grid">
+                <div className="ops-kpi">
+                  <p className="card-eyebrow" style={{ marginBottom: 0 }}>Companies Replied</p>
+                  <strong>{respondedOpportunities.length}</strong>
+                  <span className="ops-item-meta">moved beyond Applied</span>
+                </div>
+                <div className="ops-kpi">
+                  <p className="card-eyebrow" style={{ marginBottom: 0 }}>Need Your Schedule</p>
+                  <strong>{availabilityRequestedCount}</strong>
+                  <span className="ops-item-meta">asked for your availability</span>
+                </div>
+                <div className="ops-kpi">
+                  <p className="card-eyebrow" style={{ marginBottom: 0 }}>Scheduled</p>
+                  <strong>{scheduledCount}</strong>
+                  <span className="ops-item-meta">interview times already confirmed</span>
+                </div>
+                <div className="ops-kpi">
+                  <p className="card-eyebrow" style={{ marginBottom: 0 }}>Still Waiting</p>
+                  <strong>{waitingReplyCount}</strong>
+                  <span className="ops-item-meta">recruiters yet to reply</span>
+                </div>
+                <div className="ops-kpi">
+                  <p className="card-eyebrow" style={{ marginBottom: 0 }}>In Process</p>
+                  <strong>{interviewingCount}</strong>
+                  <span className="ops-item-meta">active conversations moving forward</span>
+                </div>
+              </div>
+
+              {!responseHubLoaded ? (
+                <div className="card">
+                  <p className="empty-state">Loading response hub…</p>
+                </div>
+              ) : (
+                <div className="ops-grid">
+                  <div className="ops-layout">
+                    <div className="card">
+                      <p className="card-eyebrow">Quick Log</p>
+                      <h2 className="card-title">Company Response</h2>
+                      <form className="ops-form" onSubmit={addResponse}>
+                        <input className="field-input" placeholder="Company" value={responseDraft.company} onChange={(event) => setResponseDraft({ ...responseDraft, company: event.target.value })} />
+                        <input className="field-input" placeholder="Role" value={responseDraft.role} onChange={(event) => setResponseDraft({ ...responseDraft, role: event.target.value })} />
+                        <input className="field-input" placeholder="Recruiter / primary contact" value={responseDraft.recruiterName} onChange={(event) => setResponseDraft({ ...responseDraft, recruiterName: event.target.value })} />
+                        <select className="field-input" value={responseDraft.contactChannel} onChange={(event) => setResponseDraft({ ...responseDraft, contactChannel: event.target.value as ContactChannel })}>
+                          <option>LinkedIn</option>
+                          <option>Gmail</option>
+                          <option>Phone</option>
+                          <option>Other</option>
+                        </select>
+                        <input className="field-input" placeholder="Primary contact detail / handle" value={responseDraft.contactHandle} onChange={(event) => setResponseDraft({ ...responseDraft, contactHandle: event.target.value })} />
+                        <select className="field-input" value={responseDraft.status} onChange={(event) => setResponseDraft({ ...responseDraft, status: event.target.value as ResponseStatus })}>
+                          {RESPONSE_STATUSES.map((status) => <option key={status}>{status}</option>)}
+                        </select>
+                        <input className="field-input" type="date" value={responseDraft.lastUpdated} onChange={(event) => setResponseDraft({ ...responseDraft, lastUpdated: event.target.value })} />
+                        <textarea className="field-textarea" placeholder="Notes: what they asked for, what you sent, or where the conversation stands" value={responseDraft.notes} onChange={(event) => setResponseDraft({ ...responseDraft, notes: event.target.value })} />
+                        <button className="btn-primary" type="submit">Save Response</button>
+                      </form>
+                    </div>
+
+                    <div className="card">
+                      <p className="card-eyebrow">Quick Log</p>
+                      <h2 className="card-title">Interview or Call</h2>
+                      <form className="ops-form" onSubmit={addCalendarEvent}>
+                        <input className="field-input" placeholder="Company" value={calendarDraft.company} onChange={(event) => setCalendarDraft({ ...calendarDraft, company: event.target.value })} />
+                        <input className="field-input" placeholder="Role" value={calendarDraft.role} onChange={(event) => setCalendarDraft({ ...calendarDraft, role: event.target.value })} />
+                        <input className="field-input" placeholder="Recruiter / point of contact" value={calendarDraft.recruiterName} onChange={(event) => setCalendarDraft({ ...calendarDraft, recruiterName: event.target.value })} />
+                        <select className="field-input" value={calendarDraft.type} onChange={(event) => setCalendarDraft({ ...calendarDraft, type: event.target.value as CalendarEventType })}>
+                          {CALENDAR_EVENT_TYPES.map((type) => <option key={type}>{type}</option>)}
+                        </select>
+                        <input className="field-input" type="datetime-local" value={calendarDraft.startsAt} onChange={(event) => setCalendarDraft({ ...calendarDraft, startsAt: event.target.value })} />
+                        <input className="field-input" placeholder="Zoom / phone / location" value={calendarDraft.location} onChange={(event) => setCalendarDraft({ ...calendarDraft, location: event.target.value })} />
+                        <textarea className="field-textarea" placeholder="Anything you need to remember before the event" value={calendarDraft.notes} onChange={(event) => setCalendarDraft({ ...calendarDraft, notes: event.target.value })} />
+                        <button className="btn-primary" type="submit">Add Event</button>
+                      </form>
+                    </div>
+                  </div>
+
+                  <div className="card">
+                    <p className="card-eyebrow">Calendar View</p>
+                    <h2 className="card-title">Upcoming interviews and recruiter calls</h2>
+                    <div className="week-grid">
+                      {calendarDays.map((day) => (
+                        <div className={`week-day ${day.isToday ? "today" : ""}`} key={day.dayKey}>
+                          <div className="week-day-label">{day.label}</div>
+                          {day.events.length > 0 ? day.events.map((event) => (
+                            <div className={`event-pill ${event.type === "Interview" ? "interview" : "followup"}`} key={event.id}>
+                              <strong style={{ display: "block", color: "var(--text-primary)", fontSize: 11, fontWeight: 500 }}>
+                                {event.company} · {event.role}
+                              </strong>
+                              <span>{event.type} · {formatShortDateTime(event.startsAt)}</span>
+                              {event.recruiterName ? <span>{event.recruiterName}</span> : null}
+                              {event.location ? <span>{event.location}</span> : null}
+                            </div>
+                          )) : (
+                            <span className="ops-item-meta">No events</span>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="ops-layout">
+                    <div className="card">
+                      <p className="card-eyebrow">Response Tracker</p>
+                      <h2 className="card-title">Need your availability</h2>
+                      <div className="ops-list">
+                        {groupedResponses.availabilityRequested.length > 0 ? groupedResponses.availabilityRequested.map((item) => (
+                          <div className="ops-item" key={item.id}>
+                            <div className="ops-item-row">
+                              <div>
+                                <div className="ops-item-title">{item.company} · {item.role}</div>
+                                <div className="ops-item-meta">{item.recruiterName || "Recruiter not logged"} · {item.contactChannel}{item.contactHandle ? ` · ${item.contactHandle}` : ""}</div>
+                              </div>
+                              <span className="ops-chip warn">{item.status}</span>
+                            </div>
+                            {item.notes ? <div className="ops-item-notes">{item.notes}</div> : null}
+                            <div className="ops-actions">
+                              <span className="ops-item-meta">Updated {formatShortDate(item.lastUpdated)}</span>
+                              <select
+                                className="mini-select"
+                                value={item.status}
+                                onChange={(event) => updateResponseStatus(item.id, event.target.value as ResponseStatus)}
+                              >
+                                {RESPONSE_STATUSES.map((status) => <option key={status}>{status}</option>)}
+                              </select>
+                            </div>
+                          </div>
+                        )) : <p className="empty-state">No recruiters are waiting for your availability right now.</p>}
+                      </div>
+                    </div>
+
+                    <div className="card">
+                      <p className="card-eyebrow">Response Tracker</p>
+                      <h2 className="card-title">Interviews and calls already scheduled</h2>
+                      <div className="ops-list">
+                        {groupedResponses.scheduled.length > 0 ? (
+                          groupedResponses.scheduled.map((item) => (
+                            <div className="ops-item" key={item.id}>
+                              <div className="ops-item-row">
+                                <div>
+                                  <div className="ops-item-title">{item.company} · {item.role}</div>
+                                  <div className="ops-item-meta">{item.recruiterName || "Recruiter not logged"} · {item.contactChannel}{item.contactHandle ? ` · ${item.contactHandle}` : ""}</div>
+                                </div>
+                                <span className="ops-chip sage">{item.status}</span>
+                              </div>
+                              {item.notes ? <div className="ops-item-notes">{item.notes}</div> : null}
+                              <div className="ops-actions">
+                                <span className="ops-item-meta">Updated {formatShortDate(item.lastUpdated)}</span>
+                                <select
+                                  className="mini-select"
+                                  value={item.status}
+                                  onChange={(event) => updateResponseStatus(item.id, event.target.value as ResponseStatus)}
+                                >
+                                  {RESPONSE_STATUSES.map((status) => <option key={status}>{status}</option>)}
+                                </select>
+                              </div>
+                            </div>
+                          ))
+                        ) : <p className="empty-state">No interview or recruiter call has been marked as scheduled yet.</p>}
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="ops-layout">
+                    <div className="card">
+                      <p className="card-eyebrow">Response Tracker</p>
+                      <h2 className="card-title">Active conversations after the first reply</h2>
+                      <div className="ops-list">
+                        {groupedResponses.interviewing.length > 0 ? groupedResponses.interviewing.map((item) => (
+                          <div className="ops-item" key={item.id}>
+                            <div className="ops-item-row">
+                              <div>
+                                <div className="ops-item-title">{item.company} · {item.role}</div>
+                                <div className="ops-item-meta">{item.recruiterName || "Recruiter not logged"} · {item.contactChannel}{item.contactHandle ? ` · ${item.contactHandle}` : ""}</div>
+                              </div>
+                              <span className="ops-chip sage">{item.status}</span>
+                            </div>
+                            {item.notes ? <div className="ops-item-notes">{item.notes}</div> : null}
+                            <div className="ops-actions">
+                              <span className="ops-item-meta">Updated {formatShortDate(item.lastUpdated)}</span>
+                              <select
+                                className="mini-select"
+                                value={item.status}
+                                onChange={(event) => updateResponseStatus(item.id, event.target.value as ResponseStatus)}
+                              >
+                                {RESPONSE_STATUSES.map((status) => <option key={status}>{status}</option>)}
+                              </select>
+                            </div>
+                          </div>
+                        )) : <p className="empty-state">No opportunities are currently in the live interview process.</p>}
+                      </div>
+                    </div>
+
+                    <div className="card">
+                      <p className="card-eyebrow">Response Tracker</p>
+                      <h2 className="card-title">Waiting on recruiter reply</h2>
+                      <div className="ops-list">
+                        {groupedResponses.waiting.length > 0 ? groupedResponses.waiting.map((item) => (
+                          <div className="ops-item" key={item.id}>
+                            <div className="ops-item-row">
+                              <div>
+                                <div className="ops-item-title">{item.company} · {item.role}</div>
+                                <div className="ops-item-meta">{item.recruiterName || "Recruiter not logged"} · {item.contactChannel}{item.contactHandle ? ` · ${item.contactHandle}` : ""}</div>
+                              </div>
+                              <span className={`ops-chip ${differenceInDays(item.lastUpdated) >= 3 ? "warn" : ""}`}>{item.status}</span>
+                            </div>
+                            {item.notes ? <div className="ops-item-notes">{item.notes}</div> : null}
+                            <div className="ops-actions">
+                              <span className="ops-item-meta">Last updated {formatShortDate(item.lastUpdated)}</span>
+                              <select
+                                className="mini-select"
+                                value={item.status}
+                                onChange={(event) => updateResponseStatus(item.id, event.target.value as ResponseStatus)}
+                              >
+                                {RESPONSE_STATUSES.map((status) => <option key={status}>{status}</option>)}
+                              </select>
+                            </div>
+                          </div>
+                        )) : <p className="empty-state">No recruiter conversations are sitting in a wait state.</p>}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
             </div>
           )}
 
