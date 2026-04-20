@@ -286,7 +286,7 @@ function JobTypePieChart({ jobs }: { jobs: { title: string }[] }) {
       }}
     >
       <p style={{ fontSize: 11, letterSpacing: "0.1em", textTransform: "uppercase", color: "var(--text-muted)", marginBottom: 16 }}>Applications by type</p>
-      <div style={{ position: "relative", width: "100%", height: 164 }}>
+      <div style={{ position: "relative", width: "100%", height: 192 }}>
         {total > 0 ? (
           <Doughnut
             data={{
@@ -316,21 +316,21 @@ function JobTypePieChart({ jobs }: { jobs: { title: string }[] }) {
           <div style={{ height: "100%", borderRadius: "50%", border: "10px solid #E7EDF8" }} />
         )}
         <div style={{ position: "absolute", top: "50%", left: "50%", transform: "translate(-50%,-50%)", textAlign: "center", pointerEvents: "none" }}>
-          <div style={{ fontSize: 25, color: "var(--text-primary)", fontWeight: 500 }}>{total}</div>
-          <div style={{ fontSize: 11, color: "var(--text-muted)" }}>total</div>
+          <div style={{ fontSize: 27, color: "var(--text-primary)", fontWeight: 500 }}>{total}</div>
+          <div style={{ fontSize: 12, color: "var(--text-muted)" }}>total</div>
         </div>
       </div>
       <div style={{ display: "flex", flexDirection: "column", gap: 7, marginTop: 12 }}>
         {labels.length ? labels.map((label, i) => (
-          <div key={label} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", fontSize: 12 }}>
+          <div key={label} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", fontSize: 13 }}>
             <span style={{ display: "flex", alignItems: "center", gap: 8, color: "#5B6474" }}>
-              <span style={{ width: 9, height: 9, borderRadius: 2, background: COLORS[i], flexShrink: 0, display: "inline-block" }} />
+              <span style={{ width: 10, height: 10, borderRadius: 2, background: COLORS[i], flexShrink: 0, display: "inline-block" }} />
               {label}
             </span>
-            <span style={{ color: "#6A7488", fontWeight: 500, fontSize: 12 }}>{Math.round((values[i] / total) * 100)}%</span>
+            <span style={{ color: "#6A7488", fontWeight: 500, fontSize: 13 }}>{Math.round((values[i] / total) * 100)}%</span>
           </div>
         )) : (
-          <span style={{ color: "var(--text-muted)", fontSize: 12 }}>No applications logged yet.</span>
+          <span style={{ color: "var(--text-muted)", fontSize: 13 }}>No applications logged yet.</span>
         )}
       </div>
     </div>
@@ -360,7 +360,7 @@ function WeeklyActivityChart({ jobs }: { jobs: { applied_at: string }[] }) {
       <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
         {days.map((day, i) => (
           <div key={day} style={{ display: "flex", flexDirection: "column", gap: 3 }}>
-            <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, color: "#6A7488" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, color: "#6A7488" }}>
               <span>{day}</span><span>{counts[i]}</span>
             </div>
             <div style={{ background: "#E7EEF9", borderRadius: 4, height: 8, width: "100%" }}>
@@ -1099,8 +1099,8 @@ export default function DashboardClient({
 
     .home-main-grid {
       display: grid;
-      grid-template-columns: minmax(0, 1.2fr) minmax(320px, 0.8fr);
-      gap: 12px;
+      grid-template-columns: minmax(0, 1fr) minmax(360px, 0.92fr);
+      gap: 14px;
       align-items: start;
     }
 
@@ -1108,6 +1108,7 @@ export default function DashboardClient({
     .home-right-stack {
       display: grid;
       gap: 12px;
+      min-width: 0;
     }
 
     .spotlight-card {
@@ -1126,7 +1127,7 @@ export default function DashboardClient({
     }
 
     .spotlight-title {
-      font-size: 17px;
+      font-size: 18px;
       font-weight: 500;
       color: #3B64A8;
       line-height: 1.4;
@@ -1134,14 +1135,15 @@ export default function DashboardClient({
     }
 
     .spotlight-meta {
-      font-size: 13px;
+      font-size: 14px;
       color: #5876A4;
       line-height: 1.5;
     }
 
     .countdown-grid {
       display: grid;
-      grid-template-columns: repeat(3, minmax(0, 1fr));
+      grid-template-columns: repeat(3, minmax(88px, 128px));
+      justify-content: start;
       gap: 10px;
       margin-top: 16px;
     }
@@ -1155,7 +1157,7 @@ export default function DashboardClient({
     }
 
     .countdown-value {
-      font-size: 18px;
+      font-size: 20px;
       font-weight: 500;
       color: #315FA9;
       line-height: 1;
@@ -1163,7 +1165,7 @@ export default function DashboardClient({
 
     .countdown-label {
       margin-top: 6px;
-      font-size: 11px;
+      font-size: 12px;
       letter-spacing: 0.08em;
       text-transform: uppercase;
       color: #5F7BAB;
@@ -1208,21 +1210,21 @@ export default function DashboardClient({
     }
 
     .event-role {
-      font-size: 14px;
+      font-size: 15px;
       font-weight: 500;
       color: var(--text-primary);
       line-height: 1.4;
     }
 
     .event-detail {
-      font-size: 12px;
+      font-size: 13px;
       color: var(--text-secondary);
       margin-top: 2px;
       line-height: 1.45;
     }
 
     .event-time {
-      font-size: 12px;
+      font-size: 13px;
       color: #6A7488;
       white-space: nowrap;
       padding-top: 1px;
@@ -1230,10 +1232,18 @@ export default function DashboardClient({
 
     .home-chart-card {
       display: grid;
+      width: 100%;
+      min-width: 0;
+      justify-self: stretch;
+    }
+
+    .home-chart-card > div {
+      width: 100%;
+      min-width: 0;
     }
 
     .home-chart-card canvas {
-      max-height: 210px !important;
+      max-height: 238px !important;
     }
 
     .recent-applied-row {
