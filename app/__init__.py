@@ -61,7 +61,7 @@ def create_app(test_config: dict | None = None) -> Flask:
         if request_origin in allowed_origins:
             response.headers["Access-Control-Allow-Origin"] = request_origin
         response.headers.setdefault("Access-Control-Allow-Headers", "Content-Type")
-        response.headers.setdefault("Access-Control-Allow-Methods", "GET,POST,OPTIONS")
+        response.headers.setdefault("Access-Control-Allow-Methods", "GET,POST,PATCH,DELETE,OPTIONS")
         return response
 
     app.teardown_appcontext(close_db)

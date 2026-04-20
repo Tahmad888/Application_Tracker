@@ -8,6 +8,8 @@ from .db import get_db
 from .matching import JobMatch, resolve_job_url
 from .parser import KeywordScore, infer_candidate_profile
 
+SCHEDULED_RESPONSE_STATUSES = {"Interview Scheduled", "Recruiter Call Scheduled"}
+
 
 def save_resume(filename: str, raw_text: str) -> int:
     db = get_db()
@@ -352,6 +354,259 @@ def fetch_status_notifications(limit: int = 6) -> list[dict[str, Any]]:
     return [dict(row) for row in rows]
 
 
+def fetch_response_hub_entries() -> list[dict[str, Any]]:
+    db = get_db()
+    rows = db.execute(
+        """
+        SELECT
+            id,
+            company,
+            role,
+            recruiter_name,
+            contact_channel,
+            contact_handle,
+            status,
+            last_updated,
+            notes
+        FROM response_hub_entries
+        ORDER BY last_updated DESC, company ASC, role ASC
+        """
+    ).fetchall()
+    return [
+        {
+            "id": row["id"],
+            "company": row["company"],
+            "role": row["role"],
+            "recruiterName": row["recruiter_name"],
+            "contactChannel": row["contact_channel"],
+            "contactHandle": row["contact_handle"],
+            "status": row["status"],
+            "lastUpdated": row["last_updated"],
+            "notes": row["notes"],
+        }
+        for row in rows
+    ]
+
+
+def fetch_response_hub_events() -> list[dict[str, Any]]:
+    db = get_db()
+    rows = db.execute(
+        """
+        SELECT
+            id,
+            response_id,
+            company,
+            role,
+            recruiter_name,
+            type,
+            starts_at,
+            location,
+            notes
+        FROM response_hub_events
+        ORDER BY starts_at ASC, company ASC, role ASC
+        """
+    ).fetchall()
+    return [
+        {
+            "id": row["id"],
+            "responseId": row["response_id"],
+            "company": row["company"],
+            "role": row["role"],
+            "recruiterName": row["recruiter_name"],
+            "type": row["type"],
+            "startsAt": row["starts_at"],
+            "location": row["location"],
+            "notes": row["notes"],
+        }
+        for row in rows
+    ]
+
+
+def upsert_response_hub_entry(record: dict[str, Any]) -> dict[str, Any]:
+    db = get_db()
+    db.execute(
+        """
+        INSERT INTO response_hub_entries (
+            id, company, role, recruiter_name, contact_channel,
+            contact_handle, status, last_updated, notes
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(id) DO UPDATE SET
+            company = excluded.company,
+            role = excluded.role,
+            recruiter_name = excluded.recruiter_name,
+            contact_channel = excluded.contact_channel,
+            contact_handle = excluded.contact_handle,
+            status = excluded.status,
+            last_updated = excluded.last_updated,
+            notes = excluded.notes
+        """,
+        (
+            record["id"],
+            record["company"],
+            record["role"],
+            record.get("recruiterName", ""),
+            record.get("contactChannel", "LinkedIn"),
+            record.get("contactHandle", ""),
+            record["status"],
+            record["lastUpdated"],
+            record.get("notes", ""),
+        ),
+    )
+    db.commit()
+    stored = db.execute(
+        """
+        SELECT
+            id,
+            company,
+            role,
+            recruiter_name,
+            contact_channel,
+            contact_handle,
+            status,
+            last_updated,
+            notes
+        FROM response_hub_entries
+        WHERE id = ?
+        """,
+        (record["id"],),
+    ).fetchone()
+    if not stored:
+        return {}
+    return {
+        "id": stored["id"],
+        "company": stored["company"],
+        "role": stored["role"],
+        "recruiterName": stored["recruiter_name"],
+        "contactChannel": stored["contact_channel"],
+        "contactHandle": stored["contact_handle"],
+        "status": stored["status"],
+        "lastUpdated": stored["last_updated"],
+        "notes": stored["notes"],
+    }
+
+
+def upsert_response_hub_event(record: dict[str, Any]) -> dict[str, Any]:
+    db = get_db()
+    db.execute(
+        """
+        INSERT INTO response_hub_events (
+            id, response_id, company, role, recruiter_name,
+            type, starts_at, location, notes
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(response_id) DO UPDATE SET
+            id = excluded.id,
+            company = excluded.company,
+            role = excluded.role,
+            recruiter_name = excluded.recruiter_name,
+            type = excluded.type,
+            starts_at = excluded.starts_at,
+            location = excluded.location,
+            notes = excluded.notes
+        """,
+        (
+            record["id"],
+            record["responseId"],
+            record["company"],
+            record["role"],
+            record.get("recruiterName", ""),
+            record["type"],
+            record["startsAt"],
+            record.get("location", ""),
+            record.get("notes", ""),
+        ),
+    )
+    db.commit()
+    stored = db.execute(
+        """
+        SELECT
+            id,
+            response_id,
+            company,
+            role,
+            recruiter_name,
+            type,
+            starts_at,
+            location,
+            notes
+        FROM response_hub_events
+        WHERE response_id = ?
+        """,
+        (record["responseId"],),
+    ).fetchone()
+    if not stored:
+        return {}
+    return {
+        "id": stored["id"],
+        "responseId": stored["response_id"],
+        "company": stored["company"],
+        "role": stored["role"],
+        "recruiterName": stored["recruiter_name"],
+        "type": stored["type"],
+        "startsAt": stored["starts_at"],
+        "location": stored["location"],
+        "notes": stored["notes"],
+    }
+
+
+def update_response_hub_status(response_id: str, status: str) -> None:
+    db = get_db()
+    db.execute(
+        """
+        UPDATE response_hub_entries
+        SET status = ?, last_updated = ?
+        WHERE id = ?
+        """,
+        (status, datetime.utcnow().date().isoformat(), response_id),
+    )
+    if status not in SCHEDULED_RESPONSE_STATUSES:
+        db.execute("DELETE FROM response_hub_events WHERE response_id = ?", (response_id,))
+    else:
+        event_type = "Recruiter Call" if status == "Recruiter Call Scheduled" else "Interview"
+        db.execute(
+            """
+            UPDATE response_hub_events
+            SET type = ?
+            WHERE response_id = ?
+            """,
+            (event_type, response_id),
+        )
+    db.commit()
+
+
+def delete_response_hub_entry(response_id: str) -> None:
+    db = get_db()
+    db.execute("DELETE FROM response_hub_entries WHERE id = ?", (response_id,))
+    db.commit()
+
+
+def delete_response_hub_event(event_id: str) -> None:
+    db = get_db()
+    linked = db.execute(
+        "SELECT response_id FROM response_hub_events WHERE id = ?",
+        (event_id,),
+    ).fetchone()
+    db.execute("DELETE FROM response_hub_events WHERE id = ?", (event_id,))
+    if linked:
+        db.execute(
+            """
+            UPDATE response_hub_entries
+            SET status = ?, last_updated = ?
+            WHERE id = ?
+              AND status IN (?, ?)
+            """,
+            (
+                "Interviewing",
+                datetime.utcnow().date().isoformat(),
+                linked["response_id"],
+                "Interview Scheduled",
+                "Recruiter Call Scheduled",
+            ),
+        )
+    db.commit()
+
+
 def fetch_dashboard_data() -> dict[str, Any]:
     db = get_db()
     latest_resume = db.execute(
@@ -460,6 +715,10 @@ def fetch_dashboard_data() -> dict[str, Any]:
         "tracker_stats": tracker_stats,
         "gmail_connection": fetch_gmail_connection(),
         "status_notifications": fetch_status_notifications(),
+        "response_hub": {
+            "responses": fetch_response_hub_entries(),
+            "calendar_events": fetch_response_hub_events(),
+        },
     }
 
 

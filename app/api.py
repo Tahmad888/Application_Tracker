@@ -20,14 +20,20 @@ from .matching import score_jobs
 from .parser import extract_keywords, infer_candidate_profile
 from .resume_ingest import ResumeParseError, extract_resume_text
 from .repository import (
+    delete_response_hub_entry,
+    delete_response_hub_event,
     fetch_dashboard_data,
     fetch_gmail_connection,
     fetch_job,
+    fetch_response_hub_entries,
     fetch_tracked_jobs_for_status_matching,
     mark_job_applied,
     apply_gmail_status_update,
     record_sync_event,
     replace_keywords,
+    update_response_hub_status,
+    upsert_response_hub_entry,
+    upsert_response_hub_event,
     save_resume,
     upsert_manual_job,
     upsert_jobs,
@@ -323,5 +329,95 @@ def tracker_intake():
                 "tailored_resume": tailored,
                 **review.to_response(),
             },
+        }
+    )
+
+
+@api_bp.post("/response-hub/actions")
+def create_response_hub_action():
+    payload = request.get_json(silent=True) or {}
+    response_record = {
+        "id": str(payload.get("id", "")).strip(),
+        "company": str(payload.get("company", "")).strip(),
+        "role": str(payload.get("role", "")).strip(),
+        "recruiterName": str(payload.get("recruiterName", "")).strip(),
+        "contactChannel": str(payload.get("contactChannel", "LinkedIn")).strip() or "LinkedIn",
+        "contactHandle": str(payload.get("contactHandle", "")).strip(),
+        "status": str(payload.get("status", "")).strip(),
+        "lastUpdated": str(payload.get("lastUpdated", "")).strip(),
+        "notes": str(payload.get("notes", "")).strip(),
+    }
+
+    if not response_record["id"] or not response_record["company"] or not response_record["role"] or not response_record["status"]:
+        return jsonify({"ok": False, "message": "Company Action needs an id, company, role, and status."}), 400
+
+    upsert_response_hub_entry(response_record)
+
+    event_payload = payload.get("calendarEvent")
+    if isinstance(event_payload, dict) and str(event_payload.get("startsAt", "")).strip():
+        calendar_event = {
+            "id": str(event_payload.get("id", "")).strip(),
+            "responseId": response_record["id"],
+            "company": response_record["company"],
+            "role": response_record["role"],
+            "recruiterName": response_record["recruiterName"],
+            "type": str(event_payload.get("type", "")).strip(),
+            "startsAt": str(event_payload.get("startsAt", "")).strip(),
+            "location": str(event_payload.get("location", "")).strip(),
+            "notes": str(event_payload.get("notes", "")).strip(),
+        }
+        if calendar_event["id"] and calendar_event["type"]:
+            upsert_response_hub_event(calendar_event)
+
+    return jsonify(
+        {
+            "ok": True,
+            "message": "Company action saved.",
+            "data": fetch_dashboard_data(),
+        }
+    )
+
+
+@api_bp.patch("/response-hub/responses/<string:response_id>")
+def update_response_action(response_id: str):
+    payload = request.get_json(silent=True) or {}
+    status = str(payload.get("status", "")).strip()
+    if not status:
+        return jsonify({"ok": False, "message": "Choose a status to update this company action."}), 400
+
+    existing_ids = {item["id"] for item in fetch_response_hub_entries()}
+    if response_id not in existing_ids:
+        return jsonify({"ok": False, "message": "Company action not found."}), 404
+
+    update_response_hub_status(response_id, status)
+    return jsonify(
+        {
+            "ok": True,
+            "message": "Company action updated.",
+            "data": fetch_dashboard_data(),
+        }
+    )
+
+
+@api_bp.delete("/response-hub/responses/<string:response_id>")
+def delete_response_action(response_id: str):
+    delete_response_hub_entry(response_id)
+    return jsonify(
+        {
+            "ok": True,
+            "message": "Company action deleted.",
+            "data": fetch_dashboard_data(),
+        }
+    )
+
+
+@api_bp.delete("/response-hub/events/<string:event_id>")
+def delete_response_event(event_id: str):
+    delete_response_hub_event(event_id)
+    return jsonify(
+        {
+            "ok": True,
+            "message": "Scheduled event deleted.",
+            "data": fetch_dashboard_data(),
         }
     )

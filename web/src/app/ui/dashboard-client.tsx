@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useEffect, useRef, useState, useTransition } from "react";
+import { FormEvent, useCallback, useEffect, useRef, useState, useTransition } from "react";
 import { Doughnut } from "react-chartjs-2";
 import {
   Chart as ChartJS,
@@ -131,6 +131,10 @@ type DashboardData = {
   tracker_stats: TrackerStats;
   gmail_connection: GmailConnection | null;
   status_notifications: StatusNotification[];
+  response_hub: {
+    responses: ResponseRecord[];
+    calendar_events: CalendarEventRecord[];
+  };
 };
 
 type DashboardClientProps = {
@@ -162,6 +166,7 @@ type ResponseRecord = {
 
 type CalendarEventRecord = {
   id: string;
+  responseId?: string;
   company: string;
   role: string;
   recruiterName: string;
@@ -183,7 +188,7 @@ const SCORE_LABELS: Record<string, string> = {
   freshness_fit: "Freshness",
 };
 
-const RESPONSE_HUB_STORAGE_KEY = "career-command-center-response-hub";
+const LEGACY_RESPONSE_HUB_STORAGE_KEY = "career-command-center-response-hub";
 const RESPONSE_STATUS_OPTIONS: Array<{ value: ResponseStatus; label: string }> = [
   { value: "Awaiting Reply", label: "Awaiting Reply" },
   { value: "Offer Awaiting Response", label: "Job Offer Awaiting Response" },
@@ -241,12 +246,12 @@ function formatWeekdayTime(dateLike: string) {
   });
 }
 
-function getTimePartsUntil(dateLike: string) {
+function getTimePartsUntil(dateLike: string, nowTimestamp: number) {
   const target = new Date(dateLike);
   if (Number.isNaN(target.getTime())) {
     return { days: 0, hours: 0, minutes: 0 };
   }
-  const diff = Math.max(target.getTime() - Date.now(), 0);
+  const diff = Math.max(target.getTime() - nowTimestamp, 0);
   const totalMinutes = Math.floor(diff / (1000 * 60));
   const days = Math.floor(totalMinutes / (60 * 24));
   const hours = Math.floor((totalMinutes % (60 * 24)) / 60);
@@ -379,6 +384,7 @@ export default function DashboardClient({
 }: DashboardClientProps) {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const trackerFileInputRef = useRef<HTMLInputElement | null>(null);
+  const legacyMigrationAttemptedRef = useRef(false);
   const [mode, setMode] = useState<ViewMode>("home");
   const [data, setData] = useState<DashboardData | null>(null);
   const [resumeText, setResumeText] = useState("");
@@ -390,7 +396,6 @@ export default function DashboardClient({
   const [tailoredResume, setTailoredResume] = useState<TailoredResume | null>(null);
   const [trackerPreview, setTrackerPreview] = useState<TrackerPreview | null>(null);
   const [confirmedJob, setConfirmedJob] = useState<TrackedJobDraft | null>(null);
-  const [responseHubLoaded, setResponseHubLoaded] = useState(false);
   const [responses, setResponses] = useState<ResponseRecord[]>([]);
   const [calendarEvents, setCalendarEvents] = useState<CalendarEventRecord[]>([]);
   const [responseDraft, setResponseDraft] = useState({
@@ -413,54 +418,108 @@ export default function DashboardClient({
   );
   const [emails, setEmails] = useState<EmailMessage[]>([]);
   const [statusUpdates, setStatusUpdates] = useState<StatusNotification[]>([]);
+  const [currentTimestamp, setCurrentTimestamp] = useState(() => Date.now());
   const [isPending, startTransition] = useTransition();
 
-  const loadDashboard = async () => {
+  const syncDashboardState = (payload: DashboardData) => {
+    setData(payload);
+    setResponses(payload.response_hub?.responses ?? []);
+    setCalendarEvents(payload.response_hub?.calendar_events ?? []);
+    setStatusUpdates(payload.status_notifications ?? []);
+  };
+
+  const loadDashboard = useCallback(async () => {
     const response = await fetch(`${API_BASE}/api/dashboard`, { cache: "no-store" });
     if (!response.ok) {
       setError("Could not load dashboard data from the Python service.");
       return;
     }
     const payload = (await response.json()) as DashboardData;
-    setData(payload);
-  };
+    syncDashboardState(payload);
+  }, []);
+
+  const migrateLegacyResponseHub = useCallback(async (legacyData: {
+    responses?: ResponseRecord[];
+    calendarEvents?: CalendarEventRecord[];
+  }) => {
+    const legacyResponses = legacyData.responses ?? [];
+    const legacyEvents = legacyData.calendarEvents ?? [];
+    if (!legacyResponses.length) return;
+
+    for (const responseItem of legacyResponses) {
+      const matchedEvent = legacyEvents.find(
+        (event) =>
+          event.company === responseItem.company &&
+          event.role === responseItem.role &&
+          event.recruiterName === responseItem.recruiterName,
+      );
+
+      await fetch(`${API_BASE}/api/response-hub/actions`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          id: responseItem.id,
+          company: responseItem.company,
+          role: responseItem.role,
+          recruiterName: responseItem.recruiterName,
+          contactChannel: responseItem.contactChannel,
+          contactHandle: responseItem.contactHandle,
+          status: responseItem.status,
+          lastUpdated: responseItem.lastUpdated,
+          notes: responseItem.notes,
+          calendarEvent: matchedEvent
+            ? {
+                id: matchedEvent.id,
+                type: matchedEvent.type,
+                startsAt: matchedEvent.startsAt,
+                location: matchedEvent.location,
+                notes: matchedEvent.notes,
+              }
+            : null,
+        }),
+      });
+    }
+
+    window.localStorage.removeItem(LEGACY_RESPONSE_HUB_STORAGE_KEY);
+    await loadDashboard();
+    setMessage("Recovered older Response Hub data from browser storage and saved it into the app database.");
+  }, [loadDashboard]);
 
   useEffect(() => {
     startTransition(() => {
       void loadDashboard();
     });
+  }, [loadDashboard, startTransition]);
+
+  useEffect(() => {
+    const intervalId = window.setInterval(() => {
+      setCurrentTimestamp(Date.now());
+    }, 60_000);
+    return () => window.clearInterval(intervalId);
   }, []);
 
   useEffect(() => {
+    if (!data || legacyMigrationAttemptedRef.current) return;
+    legacyMigrationAttemptedRef.current = true;
+    if ((data.response_hub?.responses?.length ?? 0) > 0 || (data.response_hub?.calendar_events?.length ?? 0) > 0) {
+      return;
+    }
+
     try {
-      const raw = window.localStorage.getItem(RESPONSE_HUB_STORAGE_KEY);
-      if (!raw) {
-        setResponseHubLoaded(true);
-        return;
-      }
+      const raw = window.localStorage.getItem(LEGACY_RESPONSE_HUB_STORAGE_KEY);
+      if (!raw) return;
       const parsed = JSON.parse(raw) as {
         responses?: ResponseRecord[];
         calendarEvents?: CalendarEventRecord[];
       };
-      setResponses(parsed.responses ?? []);
-      setCalendarEvents(parsed.calendarEvents ?? []);
+      if (!(parsed.responses ?? []).length) return;
+      startTransition(() => {
+        void migrateLegacyResponseHub(parsed);
+      });
     } catch {
-      // Fall back to empty local state if stored data is malformed.
-    } finally {
-      setResponseHubLoaded(true);
+      // Ignore malformed legacy client-only storage and continue with DB-backed state.
     }
-  }, []);
-
-  useEffect(() => {
-    if (!responseHubLoaded) return;
-    window.localStorage.setItem(
-      RESPONSE_HUB_STORAGE_KEY,
-      JSON.stringify({
-        responses,
-        calendarEvents,
-      }),
-    );
-  }, [responseHubLoaded, responses, calendarEvents]);
+  }, [data, migrateLegacyResponseHub, startTransition]);
 
   async function handleResumeSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -484,7 +543,7 @@ export default function DashboardClient({
     }
 
     setMessage(payload.message);
-    setData(payload.data);
+    syncDashboardState(payload.data);
     setResumeText("");
     setResumeFile(null);
     if (fileInputRef.current) fileInputRef.current.value = "";
@@ -618,7 +677,7 @@ export default function DashboardClient({
     }
 
     setMessage(payload.message);
-    setData(payload.data.dashboard);
+    syncDashboardState(payload.data.dashboard);
     setTailoredResume(payload.data.tailored_resume ?? null);
     setTrackerPreview(null);
     setConfirmedJob(null);
@@ -690,11 +749,11 @@ export default function DashboardClient({
   };
   const upcomingCalendarEvents = sortedCalendarEvents.filter((item) => {
     const parsed = new Date(item.startsAt);
-    return !Number.isNaN(parsed.getTime()) && parsed.getTime() >= Date.now();
+    return !Number.isNaN(parsed.getTime()) && parsed.getTime() >= currentTimestamp;
   });
   const nextCalendarEvent = upcomingCalendarEvents[0] ?? null;
   const nextCalendarCountdown = nextCalendarEvent
-    ? getTimePartsUntil(nextCalendarEvent.startsAt)
+    ? getTimePartsUntil(nextCalendarEvent.startsAt, currentTimestamp)
     : { days: 0, hours: 0, minutes: 0 };
   const homeUpcomingEvents = upcomingCalendarEvents.slice(0, 4);
   const responseRate = sortedAppliedJobs.length
@@ -718,64 +777,122 @@ export default function DashboardClient({
     }));
   }
 
-  function updateResponseStatus(id: string, status: ResponseStatus) {
-    setResponses((current) =>
-      current.map((record) =>
-        record.id === id
-          ? {
-              ...record,
-              status,
-              lastUpdated: new Date().toISOString().slice(0, 10),
-            }
-          : record,
-      ),
-    );
+  async function updateResponseStatus(id: string, status: ResponseStatus) {
+    setMessage(null);
+    setError(null);
+
+    const response = await fetch(`${API_BASE}/api/response-hub/responses/${id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ status }),
+    });
+    const payload = (await response.json()) as {
+      ok: boolean;
+      message: string;
+      data?: DashboardData;
+    };
+
+    if (!response.ok || !payload.ok || !payload.data) {
+      setError(payload.message || "Could not update that company action.");
+      return;
+    }
+
+    setMessage(payload.message);
+    syncDashboardState(payload.data);
   }
 
-  function deleteCalendarEvent(id: string) {
-    setCalendarEvents((current) => current.filter((event) => event.id !== id));
+  async function deleteCalendarEvent(id: string) {
+    setMessage(null);
+    setError(null);
+
+    const response = await fetch(`${API_BASE}/api/response-hub/events/${id}`, {
+      method: "DELETE",
+    });
+    const payload = (await response.json()) as {
+      ok: boolean;
+      message: string;
+      data?: DashboardData;
+    };
+
+    if (!response.ok || !payload.ok || !payload.data) {
+      setError(payload.message || "Could not delete that scheduled event.");
+      return;
+    }
+
+    setMessage(payload.message);
+    syncDashboardState(payload.data);
   }
 
-  function deleteResponse(id: string) {
-    setResponses((current) => current.filter((record) => record.id !== id));
+  async function deleteResponse(id: string) {
+    setMessage(null);
+    setError(null);
+
+    const response = await fetch(`${API_BASE}/api/response-hub/responses/${id}`, {
+      method: "DELETE",
+    });
+    const payload = (await response.json()) as {
+      ok: boolean;
+      message: string;
+      data?: DashboardData;
+    };
+
+    if (!response.ok || !payload.ok || !payload.data) {
+      setError(payload.message || "Could not delete that company action.");
+      return;
+    }
+
+    setMessage(payload.message);
+    syncDashboardState(payload.data);
   }
 
-  function addResponse(event: FormEvent<HTMLFormElement>) {
+  async function addResponse(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!responseDraft.company.trim() || !responseDraft.role.trim()) return;
 
     const eventType = eventTypeForStatus(responseDraft.status);
     const shouldCreateEvent = Boolean(responseDraft.startsAt) && Boolean(eventType);
-    const resolvedStatus = responseDraft.status;
+    const responseId = createLocalId();
 
-    setResponses((current) => [
-      {
-        id: createLocalId(),
-        ...responseDraft,
+    setMessage(null);
+    setError(null);
+
+    const response = await fetch(`${API_BASE}/api/response-hub/actions`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        id: responseId,
         company: responseDraft.company.trim(),
         role: responseDraft.role.trim(),
         recruiterName: responseDraft.recruiterName.trim(),
+        contactChannel: responseDraft.contactChannel,
         contactHandle: responseDraft.contactHandle.trim(),
-        status: resolvedStatus,
+        status: responseDraft.status,
+        lastUpdated: responseDraft.lastUpdated,
         notes: responseDraft.notes.trim(),
-      },
-      ...current,
-    ]);
-    if (shouldCreateEvent) {
-      setCalendarEvents((current) => [
-        {
-          id: createLocalId(),
-          company: responseDraft.company.trim(),
-          role: responseDraft.role.trim(),
-          recruiterName: responseDraft.recruiterName.trim(),
-          type: eventType!,
-          startsAt: responseDraft.startsAt,
-          location: responseDraft.location.trim(),
-          notes: responseDraft.notes.trim(),
-        },
-        ...current,
-      ]);
+        calendarEvent: shouldCreateEvent
+          ? {
+              id: createLocalId(),
+              type: eventType,
+              startsAt: responseDraft.startsAt,
+              location: responseDraft.location.trim(),
+              notes: responseDraft.notes.trim(),
+            }
+          : null,
+      }),
+    });
+    const payload = (await response.json()) as {
+      ok: boolean;
+      message: string;
+      data?: DashboardData;
+    };
+
+    if (!response.ok || !payload.ok || !payload.data) {
+      setError(payload.message || "Could not save that company action.");
+      return;
     }
+
+    setMessage(payload.message);
+    syncDashboardState(payload.data);
     setResponseDraft({
       company: "",
       role: "",
@@ -2658,7 +2775,7 @@ export default function DashboardClient({
                 </div>
               </div>
 
-              {!responseHubLoaded ? (
+              {!data ? (
                 <div className="card">
                   <p className="empty-state">Loading response hub…</p>
                 </div>

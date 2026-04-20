@@ -100,6 +100,31 @@ CREATE TABLE IF NOT EXISTS application_status_events (
     UNIQUE(job_id, email_id, new_status),
     FOREIGN KEY (job_id) REFERENCES jobs (id)
 );
+
+CREATE TABLE IF NOT EXISTS response_hub_entries (
+    id TEXT PRIMARY KEY,
+    company TEXT NOT NULL,
+    role TEXT NOT NULL,
+    recruiter_name TEXT NOT NULL DEFAULT '',
+    contact_channel TEXT NOT NULL DEFAULT 'LinkedIn',
+    contact_handle TEXT NOT NULL DEFAULT '',
+    status TEXT NOT NULL,
+    last_updated TEXT NOT NULL,
+    notes TEXT NOT NULL DEFAULT ''
+);
+
+CREATE TABLE IF NOT EXISTS response_hub_events (
+    id TEXT PRIMARY KEY,
+    response_id TEXT NOT NULL UNIQUE,
+    company TEXT NOT NULL,
+    role TEXT NOT NULL,
+    recruiter_name TEXT NOT NULL DEFAULT '',
+    type TEXT NOT NULL,
+    starts_at TEXT NOT NULL,
+    location TEXT NOT NULL DEFAULT '',
+    notes TEXT NOT NULL DEFAULT '',
+    FOREIGN KEY (response_id) REFERENCES response_hub_entries (id) ON DELETE CASCADE
+);
 """
 
 
