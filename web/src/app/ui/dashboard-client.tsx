@@ -1,15 +1,20 @@
 "use client";
 
 import { FormEvent, useCallback, useEffect, useRef, useState, useTransition } from "react";
-import { Doughnut } from "react-chartjs-2";
+import { Doughnut, Line } from "react-chartjs-2";
 import {
   Chart as ChartJS,
   ArcElement,
+  CategoryScale,
   Tooltip,
   Legend,
+  LineElement,
+  LinearScale,
+  PointElement,
+  Filler,
 } from "chart.js";
 
-ChartJS.register(ArcElement, Tooltip, Legend);
+ChartJS.register(ArcElement, CategoryScale, Tooltip, Legend, LineElement, LinearScale, PointElement, Filler);
 
 type Keyword = {
   category: string;
@@ -119,6 +124,12 @@ type Job = {
     applied_at?: string;
     status?: string;
     notes?: string;
+    latest_status_event?: {
+      new_status?: string;
+      email_subject?: string;
+      email_snippet?: string;
+      observed_at?: string;
+    } | null;
   } | null;
 };
 
@@ -135,6 +146,7 @@ type DashboardData = {
     responses: ResponseRecord[];
     calendar_events: CalendarEventRecord[];
   };
+  learning: LearningDashboard;
 };
 
 type DashboardClientProps = {
@@ -143,14 +155,20 @@ type DashboardClientProps = {
 };
 
 type ResponseStatus =
-  | "Awaiting Reply"
-  | "Offer Awaiting Response"
-  | "Recruiter Call Scheduled"
+  | "Recruiter Outreach"
   | "Interview Scheduled"
-  | "Interviewing"
-  | "Closed";
+  | "Interview in Progress"
+  | "Rejected";
 type ContactChannel = "LinkedIn" | "Gmail" | "Phone" | "Other";
-type CalendarEventType = "Interview" | "Recruiter Call";
+type CalendarEventType = "Interview";
+type InterviewRound =
+  | ""
+  | "1"
+  | "2"
+  | "3"
+  | "4"
+  | "5"
+  | "Final Round";
 
 type ResponseRecord = {
   id: string;
@@ -160,6 +178,7 @@ type ResponseRecord = {
   contactChannel: ContactChannel;
   contactHandle: string;
   status: ResponseStatus;
+  interviewRound: InterviewRound;
   lastUpdated: string;
   notes: string;
 };
@@ -176,26 +195,46 @@ type CalendarEventRecord = {
   notes: string;
 };
 
-type ViewMode = "home" | "job-search" | "job-tracker" | "ops-dashboard";
+type LearningTopic = {
+  id: number;
+  sortOrder: number;
+  title: string;
+};
+
+type LearningSession = {
+  topicId: number;
+  sessionDate: string;
+  weekStart: string;
+  minutes: number;
+};
+
+type LearningDashboard = {
+  topics: LearningTopic[];
+  current_week_start: string;
+  current_week_dates: string[];
+  sessions: LearningSession[];
+  history: LearningSession[];
+};
+
+type ViewMode = "home" | "job-search" | "job-tracker" | "ops-dashboard" | "my-learning";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://127.0.0.1:5000";
-const SCORE_LABELS: Record<string, string> = {
-  title_fit: "Title",
-  skill_fit: "Skills",
-  archetype_fit: "Lane",
-  seniority_fit: "Seniority",
-  location_fit: "Location",
-  freshness_fit: "Freshness",
-};
 
 const LEGACY_RESPONSE_HUB_STORAGE_KEY = "career-command-center-response-hub";
 const RESPONSE_STATUS_OPTIONS: Array<{ value: ResponseStatus; label: string }> = [
-  { value: "Awaiting Reply", label: "Awaiting Reply" },
-  { value: "Offer Awaiting Response", label: "Job Offer Awaiting Response" },
-  { value: "Recruiter Call Scheduled", label: "Recruiter Call Scheduled" },
+  { value: "Recruiter Outreach", label: "Recruiter Outreach" },
   { value: "Interview Scheduled", label: "Interview Scheduled" },
-  { value: "Interviewing", label: "Active Interview Process" },
-  { value: "Closed", label: "Closed" },
+  { value: "Interview in Progress", label: "Interview in Progress" },
+  { value: "Rejected", label: "Rejected" },
+];
+const INTERVIEW_ROUND_OPTIONS: InterviewRound[] = [
+  "",
+  "1",
+  "2",
+  "3",
+  "4",
+  "5",
+  "Final Round",
 ];
 
 function createLocalId() {
@@ -203,17 +242,8 @@ function createLocalId() {
 }
 
 function eventTypeForStatus(status: ResponseStatus): CalendarEventType | null {
-  if (status === "Recruiter Call Scheduled") return "Recruiter Call";
   if (status === "Interview Scheduled") return "Interview";
   return null;
-}
-
-function differenceInDays(dateLike: string) {
-  if (!dateLike) return 0;
-  const target = new Date(dateLike);
-  if (Number.isNaN(target.getTime())) return 0;
-  const now = new Date();
-  return Math.floor((now.getTime() - target.getTime()) / (1000 * 60 * 60 * 24));
 }
 
 function formatShortDate(dateLike: string) {
@@ -257,6 +287,109 @@ function getTimePartsUntil(dateLike: string, nowTimestamp: number) {
   const hours = Math.floor((totalMinutes % (60 * 24)) / 60);
   const minutes = totalMinutes % 60;
   return { days, hours, minutes };
+}
+
+function getCurrentWeekWindow(nowTimestamp: number) {
+  const now = new Date(nowTimestamp);
+  const start = new Date(now);
+  const day = start.getDay();
+  const daysSinceMonday = (day + 6) % 7;
+  start.setDate(start.getDate() - daysSinceMonday);
+  start.setHours(0, 0, 0, 0);
+
+  const end = new Date(start);
+  end.setDate(start.getDate() + 6);
+  end.setHours(23, 59, 59, 999);
+
+  return { start, end };
+}
+
+function formatRoundLabel(round: InterviewRound) {
+  if (!round) return "";
+  return round === "Final Round" ? round : `Round ${round}`;
+}
+
+type ImportantEmailCard = {
+  id: string;
+  priority: "action" | "update" | "passive";
+  label: string;
+  subject: string;
+  from: string;
+  date: string;
+  snippet: string;
+};
+
+function classifyImportantEmail(email: EmailMessage): ImportantEmailCard {
+  const combined = `${email.subject} ${email.snippet}`.toLowerCase();
+
+  const actionNeededPatterns = [
+    "availability",
+    "schedule",
+    "scheduling",
+    "select a time",
+    "book a time",
+    "complete assessment",
+    "take-home",
+    "hackerank",
+    "coding test",
+    "reply by",
+    "respond by",
+    "next steps",
+    "action required",
+    "confirm your interview",
+    "interview request",
+    "please reply",
+  ];
+
+  const importantUpdatePatterns = [
+    "interview",
+    "phone screen",
+    "recruiter screen",
+    "assessment",
+    "under review",
+    "reviewing your application",
+    "moving forward",
+    "final round",
+    "offer",
+    "not selected",
+    "rejected",
+    "application received",
+    "thank you for applying",
+  ];
+
+  if (actionNeededPatterns.some((pattern) => combined.includes(pattern))) {
+    return {
+      id: email.id,
+      priority: "action",
+      label: "Action needed",
+      subject: email.subject || "No subject",
+      from: email.from,
+      date: email.date,
+      snippet: email.snippet,
+    };
+  }
+
+  if (importantUpdatePatterns.some((pattern) => combined.includes(pattern))) {
+    return {
+      id: email.id,
+      priority: "update",
+      label: "Important update",
+      subject: email.subject || "No subject",
+      from: email.from,
+      date: email.date,
+      snippet: email.snippet,
+    };
+  }
+
+  return {
+    id: email.id,
+    priority: "passive",
+    label: "Passive update",
+    subject: email.subject || "No subject",
+    from: email.from,
+    date: email.date,
+    snippet: email.snippet,
+  };
 }
 
 function JobTypePieChart({ jobs }: { jobs: { title: string }[] }) {
@@ -342,12 +475,22 @@ function JobTypePieChart({ jobs }: { jobs: { title: string }[] }) {
   );
 }
 
-function WeeklyActivityChart({ jobs }: { jobs: { applied_at: string }[] }) {
-  const days = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+function WeeklyActivityChart({
+  jobs,
+  nowTimestamp,
+}: {
+  jobs: { applied_at: string }[];
+  nowTimestamp: number;
+}) {
+  const days = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
   const counts = new Array(7).fill(0);
+  const { start, end } = getCurrentWeekWindow(nowTimestamp);
   jobs.forEach((job) => {
     const d = new Date(job.applied_at);
-    if (!Number.isNaN(d.getTime())) counts[d.getDay()]++;
+    if (Number.isNaN(d.getTime())) return;
+    if (d < start || d > end) return;
+    const index = (d.getDay() + 6) % 7;
+    counts[index]++;
   });
   const max = Math.max(...counts, 1);
 
@@ -373,6 +516,269 @@ function WeeklyActivityChart({ jobs }: { jobs: { applied_at: string }[] }) {
             </div>
           </div>
         ))}
+      </div>
+    </div>
+  );
+}
+
+function ApplicationTrendChart({
+  jobs,
+  nowTimestamp,
+}: {
+  jobs: { applied_at: string }[];
+  nowTimestamp: number;
+}) {
+  const points = Array.from({ length: 7 }, (_, index) => {
+    const day = new Date(nowTimestamp);
+    day.setHours(0, 0, 0, 0);
+    day.setDate(day.getDate() - (6 - index));
+    const dayKey = day.toISOString().slice(0, 10);
+    return {
+      key: dayKey,
+      label: day.toLocaleDateString(undefined, { weekday: "short" }),
+      count: 0,
+    };
+  });
+
+  jobs.forEach((job) => {
+    const parsed = new Date(job.applied_at);
+    if (Number.isNaN(parsed.getTime())) return;
+    const key = parsed.toISOString().slice(0, 10);
+    const point = points.find((item) => item.key === key);
+    if (point) point.count += 1;
+  });
+
+  const lastDayCount = points.at(-1)?.count ?? 0;
+  const lastSevenDaysCount = points.reduce((sum, item) => sum + item.count, 0);
+
+  return (
+    <div
+      style={{
+        background: "#FFFFFF",
+        border: "1px solid #DFE6F2",
+        borderRadius: 14,
+        padding: "1.1rem 1.25rem",
+        boxShadow: "0 1px 0 rgba(26,26,26,0.02)",
+      }}
+    >
+      <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12, marginBottom: 12 }}>
+        <div>
+          <p style={{ fontSize: 11, letterSpacing: "0.1em", textTransform: "uppercase", color: "var(--text-muted)", marginBottom: 8 }}>Application trend</p>
+          <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+            <span style={{ display: "inline-flex", flexDirection: "column", gap: 2, padding: "8px 10px", background: "#EEF4FF", border: "1px solid #D5E0F8", borderRadius: 10 }}>
+              <strong style={{ fontSize: 18, color: "#3B64A8", fontWeight: 500 }}>{lastDayCount}</strong>
+              <span style={{ fontSize: 11, color: "#6A7488" }}>last day</span>
+            </span>
+            <span style={{ display: "inline-flex", flexDirection: "column", gap: 2, padding: "8px 10px", background: "#EEF6F1", border: "1px solid #D6E6DD", borderRadius: 10 }}>
+              <strong style={{ fontSize: 18, color: "#3D6B5E", fontWeight: 500 }}>{lastSevenDaysCount}</strong>
+              <span style={{ fontSize: 11, color: "#6A7488" }}>7 days</span>
+            </span>
+          </div>
+        </div>
+      </div>
+      <div style={{ height: 168 }}>
+        <Line
+          data={{
+            labels: points.map((point) => point.label),
+            datasets: [
+              {
+                data: points.map((point) => point.count),
+                borderColor: "#5A8DE1",
+                backgroundColor: "rgba(90, 141, 225, 0.12)",
+                pointBackgroundColor: "#5A8DE1",
+                pointBorderColor: "#FFFFFF",
+                pointBorderWidth: 2,
+                pointRadius: 4,
+                pointHoverRadius: 5,
+                fill: true,
+                tension: 0.35,
+              },
+            ],
+          }}
+          options={{
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {
+              legend: { display: false },
+              tooltip: {
+                callbacks: {
+                  label: (context) => ` ${context.parsed.y} applied`,
+                },
+              },
+            },
+            scales: {
+              x: {
+                grid: { display: false },
+                border: { display: false },
+                ticks: { color: "#6A7488", font: { size: 12 } },
+              },
+              y: {
+                beginAtZero: true,
+                grid: { color: "#E7EEF9" },
+                border: { display: false },
+                ticks: {
+                  color: "#6A7488",
+                  font: { size: 12 },
+                  precision: 0,
+                },
+              },
+            },
+          }}
+        />
+      </div>
+    </div>
+  );
+}
+
+function LearningTrendChart({
+  topics,
+  history,
+}: {
+  topics: LearningTopic[];
+  history: LearningSession[];
+}) {
+  const weekStarts = Array.from(new Set(history.map((item) => item.weekStart))).sort().slice(-6);
+  const labels = weekStarts.map((weekStart) => {
+    const parsed = new Date(`${weekStart}T00:00:00`);
+    return Number.isNaN(parsed.getTime())
+      ? weekStart
+      : parsed.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+  });
+  const colors = ["#5A8DE1", "#53A874", "#C78533", "#A16BDB"];
+
+  const datasets = topics.map((topic, index) => ({
+    label: topic.title || `Tile ${topic.sortOrder}`,
+    data: weekStarts.map((weekStart) => (
+      history
+        .filter((entry) => entry.topicId === topic.id && entry.weekStart === weekStart)
+        .reduce((sum, entry) => sum + entry.minutes, 0)
+    )),
+    borderColor: colors[index % colors.length],
+    backgroundColor: `${colors[index % colors.length]}22`,
+    pointBackgroundColor: colors[index % colors.length],
+    pointRadius: 3,
+    pointHoverRadius: 4,
+    tension: 0.35,
+    fill: false,
+  }));
+
+  return (
+    <div className="card">
+      <p className="card-eyebrow">Trend</p>
+      <h2 className="card-title">Weekly learning minutes</h2>
+      <p className="card-body" style={{ marginBottom: 14 }}>
+        Each checked day counts as 30 minutes. Older weeks stay in history.
+      </p>
+      <div style={{ height: 260 }}>
+        <Line
+          data={{
+            labels: labels.length ? labels : ["No history yet"],
+            datasets: labels.length ? datasets : [{
+              label: "Learning",
+              data: [0],
+              borderColor: "#D6DCE8",
+              backgroundColor: "#D6DCE8",
+              pointRadius: 0,
+            }],
+          }}
+          options={{
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {
+              legend: {
+                display: true,
+                position: "bottom",
+                labels: {
+                  color: "var(--text-secondary)",
+                  boxWidth: 12,
+                  boxHeight: 12,
+                  font: { size: 12 },
+                },
+              },
+              tooltip: {
+                callbacks: {
+                  label: (context) => ` ${context.dataset.label}: ${context.parsed.y} min`,
+                },
+              },
+            },
+            scales: {
+              x: {
+                grid: { display: false },
+                border: { display: false },
+                ticks: { color: "var(--text-secondary)", font: { size: 12 } },
+              },
+              y: {
+                beginAtZero: true,
+                suggestedMax: 210,
+                grid: { color: "#E7EEF9" },
+                border: { display: false },
+                ticks: {
+                  color: "var(--text-secondary)",
+                  font: { size: 12 },
+                  callback: (value) => `${value}m`,
+                },
+              },
+            },
+          }}
+        />
+      </div>
+    </div>
+  );
+}
+
+function LearningHeatmap({ history }: { history: LearningSession[] }) {
+  const days = Array.from({ length: 30 }, (_, index) => {
+    const day = new Date();
+    day.setHours(0, 0, 0, 0);
+    day.setDate(day.getDate() - (29 - index));
+    const key = day.toISOString().slice(0, 10);
+    const totalMinutes = history
+      .filter((entry) => entry.sessionDate === key)
+      .reduce((sum, entry) => sum + entry.minutes, 0);
+    const color =
+      totalMinutes >= 120 ? "#2B6B57" :
+      totalMinutes >= 90 ? "#4A8E77" :
+      totalMinutes >= 60 ? "#79B29F" :
+      totalMinutes >= 30 ? "#B9D6CC" :
+      "#EEF2F5";
+    return {
+      key,
+      label: day.toLocaleDateString(undefined, { month: "short", day: "numeric" }),
+      totalMinutes,
+      color,
+    };
+  });
+
+  return (
+    <div className="card">
+      <p className="card-eyebrow">Consistency</p>
+      <h2 className="card-title">Last 30 days</h2>
+      <p className="card-body" style={{ marginBottom: 14 }}>
+        Darker tiles mean more study time logged across all topics.
+      </p>
+      <div
+        style={{
+          display: "grid",
+          gridTemplateColumns: "repeat(10, minmax(0, 1fr))",
+          gap: 8,
+        }}
+      >
+        {days.map((day) => (
+          <div
+            key={day.key}
+            title={`${day.label}: ${day.totalMinutes} min`}
+            style={{
+              height: 20,
+              borderRadius: 6,
+              background: day.color,
+              border: "1px solid #E4EAF3",
+            }}
+          />
+        ))}
+      </div>
+      <div style={{ display: "flex", justifyContent: "space-between", gap: 8, marginTop: 12, fontSize: 12, color: "var(--text-secondary)" }}>
+        <span>Less</span>
+        <span>More</span>
       </div>
     </div>
   );
@@ -404,7 +810,8 @@ export default function DashboardClient({
     recruiterName: "",
     contactChannel: "LinkedIn" as ContactChannel,
     contactHandle: "",
-    status: "Awaiting Reply" as ResponseStatus,
+    status: "Recruiter Outreach" as ResponseStatus,
+    interviewRound: "" as InterviewRound,
     lastUpdated: new Date().toISOString().slice(0, 10),
     startsAt: "",
     location: "",
@@ -418,7 +825,13 @@ export default function DashboardClient({
   );
   const [emails, setEmails] = useState<EmailMessage[]>([]);
   const [statusUpdates, setStatusUpdates] = useState<StatusNotification[]>([]);
+  const [gmailCheckStats, setGmailCheckStats] = useState({
+    matched: 0,
+    updated: 0,
+    unmatched: 0,
+  });
   const [currentTimestamp, setCurrentTimestamp] = useState(() => Date.now());
+  const [learningTitleDrafts, setLearningTitleDrafts] = useState<Record<number, string>>({});
   const [isPending, startTransition] = useTransition();
 
   const syncDashboardState = (payload: DashboardData) => {
@@ -465,6 +878,7 @@ export default function DashboardClient({
           contactChannel: responseItem.contactChannel,
           contactHandle: responseItem.contactHandle,
           status: responseItem.status,
+          interviewRound: responseItem.interviewRound ?? "",
           lastUpdated: responseItem.lastUpdated,
           notes: responseItem.notes,
           calendarEvent: matchedEvent
@@ -590,6 +1004,11 @@ export default function DashboardClient({
     setMessage(payload.message);
     setEmails(payload.data.emails);
     setStatusUpdates(payload.data.status_updates);
+    setGmailCheckStats({
+      matched: payload.data.matched_count,
+      updated: payload.data.updated_count,
+      unmatched: payload.data.unmatched_count,
+    });
     await loadDashboard();
   }
 
@@ -635,6 +1054,53 @@ export default function DashboardClient({
     });
     setConfirmedJob(payload.data.parsed_job);
     setTailoredResume(payload.data.tailored_resume ?? null);
+  }
+
+  async function updateLearningTopic(topicId: number) {
+    setMessage(null);
+    setError(null);
+
+    const response = await fetch(`${API_BASE}/api/learning/topics/${topicId}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ title: learningTitleDrafts[topicId] ?? "" }),
+    });
+    const payload = (await response.json()) as {
+      ok: boolean;
+      message: string;
+      data?: DashboardData;
+    };
+
+    if (!response.ok || !payload.ok || !payload.data) {
+      setError(payload.message || "Could not update learning topic.");
+      return;
+    }
+
+    setMessage(payload.message);
+    syncDashboardState(payload.data);
+  }
+
+  async function toggleLearningSession(topicId: number, sessionDate: string, completed: boolean) {
+    setMessage(null);
+    setError(null);
+
+    const response = await fetch(`${API_BASE}/api/learning/sessions`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ topicId, sessionDate, completed }),
+    });
+    const payload = (await response.json()) as {
+      ok: boolean;
+      message: string;
+      data?: DashboardData;
+    };
+
+    if (!response.ok || !payload.ok || !payload.data) {
+      setError(payload.message || "Could not update learning progress.");
+      return;
+    }
+
+    syncDashboardState(payload.data);
   }
 
   async function handleTrackerConfirm() {
@@ -700,21 +1166,29 @@ export default function DashboardClient({
     location: job.location,
     applied_at: job.application?.applied_at ?? job.posted_at ?? "",
   }));
+  const learningTopics = data?.learning?.topics ?? [];
+  const learningCurrentWeekDates = data?.learning?.current_week_dates ?? [];
+  const learningCurrentWeekSessions = data?.learning?.sessions ?? [];
+  const learningHistory = data?.learning?.history ?? [];
+  const learningCompletedKeys = new Set(
+    learningCurrentWeekSessions.map((session) => `${session.topicId}-${session.sessionDate}`),
+  );
+  const learningWeekMinutes = learningCurrentWeekSessions.reduce((sum, session) => sum + session.minutes, 0);
+  const learningCompletedDays = learningCurrentWeekSessions.length;
+  const learningStreakCount = [...learningCurrentWeekDates].filter((date) => (
+    learningCurrentWeekSessions.some((session) => session.sessionDate === date)
+  )).length;
   const sortedResponses = [...responses].sort((left, right) => {
     const rank = (status: ResponseStatus) => {
       switch (status) {
-        case "Offer Awaiting Response":
-          return 0;
-        case "Recruiter Call Scheduled":
-          return 1;
         case "Interview Scheduled":
+          return 0;
+        case "Interview in Progress":
+          return 1;
+        case "Recruiter Outreach":
           return 2;
-        case "Interviewing":
+        case "Rejected":
           return 3;
-        case "Awaiting Reply":
-          return 4;
-        case "Closed":
-          return 5;
       }
     };
     const ranked = rank(left.status) - rank(right.status);
@@ -722,6 +1196,13 @@ export default function DashboardClient({
     return right.lastUpdated.localeCompare(left.lastUpdated);
   });
   const sortedCalendarEvents = [...calendarEvents].sort((left, right) => left.startsAt.localeCompare(right.startsAt));
+  const responseEventMap = new Map(
+    sortedCalendarEvents.map((event) => [event.responseId ?? "", event] as const),
+  );
+  const futureCalendarEvents = sortedCalendarEvents.filter((event) => {
+    const parsed = new Date(event.startsAt);
+    return !Number.isNaN(parsed.getTime()) && parsed.getTime() >= currentTimestamp;
+  });
 
   const calendarDays = Array.from({ length: 7 }, (_, index) => {
     const base = new Date();
@@ -732,46 +1213,66 @@ export default function DashboardClient({
       dayKey,
       label: base.toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" }),
       isToday: index === 0,
-      events: sortedCalendarEvents.filter((event) => event.startsAt.slice(0, 10) === dayKey),
+      events: futureCalendarEvents.filter((event) => event.startsAt.slice(0, 10) === dayKey),
     };
   });
 
-  const respondedOpportunities = responses.filter((item) => item.status !== "Awaiting Reply" && item.status !== "Closed");
-  const offerAwaitingResponseCount = responses.filter((item) => item.status === "Offer Awaiting Response").length;
-  const scheduledCount = responses.filter((item) => item.status === "Interview Scheduled" || item.status === "Recruiter Call Scheduled").length;
-  const waitingReplyCount = responses.filter((item) => item.status === "Awaiting Reply").length;
-  const interviewingCount = responses.filter((item) => item.status === "Interviewing").length;
-  const groupedResponses = {
-    offerAwaitingResponse: sortedResponses.filter((item) => item.status === "Offer Awaiting Response"),
-    scheduled: sortedResponses.filter((item) => item.status === "Interview Scheduled" || item.status === "Recruiter Call Scheduled"),
-    interviewing: sortedResponses.filter((item) => item.status === "Interviewing"),
-    waiting: sortedResponses.filter((item) => item.status === "Awaiting Reply"),
-  };
-  const upcomingCalendarEvents = sortedCalendarEvents.filter((item) => {
-    const parsed = new Date(item.startsAt);
+  const respondedOpportunities = responses.filter((item) => item.status !== "Recruiter Outreach");
+  const outreachCount = responses.filter((item) => item.status === "Recruiter Outreach").length;
+  const futureScheduledResponses = sortedResponses.filter((item) => {
+    if (item.status !== "Interview Scheduled") return false;
+    const linkedEvent = responseEventMap.get(item.id);
+    if (!linkedEvent) return true;
+    const parsed = new Date(linkedEvent.startsAt);
     return !Number.isNaN(parsed.getTime()) && parsed.getTime() >= currentTimestamp;
   });
-  const nextCalendarEvent = upcomingCalendarEvents[0] ?? null;
+  const pastInterviewResponses = sortedResponses
+    .filter((item) => item.status === "Interview Scheduled")
+    .map((item) => ({ response: item, event: responseEventMap.get(item.id) }))
+    .filter(({ event }) => {
+      if (!event) return false;
+      const parsed = new Date(event.startsAt);
+      return !Number.isNaN(parsed.getTime()) && parsed.getTime() < currentTimestamp;
+    });
+  const scheduledCount = futureScheduledResponses.length;
+  const inProgressCount = responses.filter((item) => item.status === "Interview in Progress").length;
+  const rejectedCount = responses.filter((item) => item.status === "Rejected").length;
+  const groupedResponses = {
+    outreach: sortedResponses.filter((item) => item.status === "Recruiter Outreach"),
+    scheduled: futureScheduledResponses,
+    inProgress: sortedResponses.filter((item) => item.status === "Interview in Progress"),
+    rejected: sortedResponses.filter((item) => item.status === "Rejected"),
+    history: pastInterviewResponses,
+  };
+  const homeCalendarEvents = futureCalendarEvents;
+  const nextCalendarEvent = homeCalendarEvents[0] ?? null;
   const nextCalendarCountdown = nextCalendarEvent
     ? getTimePartsUntil(nextCalendarEvent.startsAt, currentTimestamp)
     : { days: 0, hours: 0, minutes: 0 };
-  const homeUpcomingEvents = upcomingCalendarEvents.slice(0, 4);
+  const homeUpcomingEvents = homeCalendarEvents;
   const responseRate = sortedAppliedJobs.length
     ? Math.round((respondedOpportunities.length / sortedAppliedJobs.length) * 100)
     : 0;
-  const activeProcessesCount = offerAwaitingResponseCount + scheduledCount + interviewingCount;
+  const activeProcessesCount = scheduledCount + inProgressCount;
   const greetingLine = new Date().toLocaleDateString(undefined, {
     weekday: "long",
     month: "long",
     day: "numeric",
   });
+  const classifiedEmails = emails.map(classifyImportantEmail);
+  const actionNeededEmails = classifiedEmails.filter((email) => email.priority === "action");
+  const importantUpdateEmails = classifiedEmails.filter((email) => email.priority === "update");
   const recentAppliedCards = sortedAppliedJobs.slice(0, 4);
   const schedulingStatusSelected = eventTypeForStatus(responseDraft.status) !== null;
 
-  function handleResponseStatusChange(status: ResponseStatus) {
+function handleResponseStatusChange(status: ResponseStatus) {
     setResponseDraft((current) => ({
       ...current,
       status,
+      interviewRound:
+        status === "Interview Scheduled" || status === "Interview in Progress"
+          ? current.interviewRound
+          : "",
       startsAt: eventTypeForStatus(status) ? current.startsAt : "",
       location: eventTypeForStatus(status) ? current.location : "",
     }));
@@ -867,6 +1368,7 @@ export default function DashboardClient({
         contactChannel: responseDraft.contactChannel,
         contactHandle: responseDraft.contactHandle.trim(),
         status: responseDraft.status,
+        interviewRound: responseDraft.interviewRound,
         lastUpdated: responseDraft.lastUpdated,
         notes: responseDraft.notes.trim(),
         calendarEvent: shouldCreateEvent
@@ -899,7 +1401,8 @@ export default function DashboardClient({
       recruiterName: "",
       contactChannel: "LinkedIn",
       contactHandle: "",
-      status: "Awaiting Reply",
+      status: "Recruiter Outreach",
+      interviewRound: "",
       lastUpdated: new Date().toISOString().slice(0, 10),
       startsAt: "",
       location: "",
@@ -2539,6 +3042,13 @@ export default function DashboardClient({
             {iconOps}
             <span className="nav-tooltip">Response Hub</span>
           </button>
+          <button
+            className={`nav-btn ${mode === "my-learning" ? "active" : ""}`}
+            onClick={() => setMode("my-learning")}
+          >
+            {iconDoc}
+            <span className="nav-tooltip">My Learning</span>
+          </button>
         </nav>
 
         {/* Main */}
@@ -2623,9 +3133,9 @@ export default function DashboardClient({
                         </>
                       ) : (
                         <>
-                          <div className="spotlight-title">No interview or call is scheduled yet</div>
+                          <div className="spotlight-title">No interview is scheduled for this week yet</div>
                           <div className="spotlight-meta">
-                            Use the Response Hub calendar to log the next recruiter call or interview so it stays visible here.
+                            Log a scheduled interview in Response Hub and it will stay visible here through Sunday night.
                           </div>
                           <div className="btn-row" style={{ marginTop: 18 }}>
                             <button className="btn-ghost" onClick={() => setMode("ops-dashboard")}>
@@ -2667,7 +3177,10 @@ export default function DashboardClient({
                       <JobTypePieChart jobs={recentJobs} />
                     </div>
                     <div className="home-chart-card">
-                      <WeeklyActivityChart jobs={recentJobs} />
+                      <WeeklyActivityChart jobs={recentJobs} nowTimestamp={currentTimestamp} />
+                    </div>
+                    <div className="home-chart-card">
+                      <ApplicationTrendChart jobs={recentJobs} nowTimestamp={currentTimestamp} />
                     </div>
                   </div>
                 </div>
@@ -2754,9 +3267,9 @@ export default function DashboardClient({
                   <span className="ops-item-meta">moved beyond Applied</span>
                 </div>
                 <div className="ops-kpi">
-                  <p className="card-eyebrow" style={{ marginBottom: 0 }}>Offer Awaiting Reply</p>
-                  <strong>{offerAwaitingResponseCount}</strong>
-                  <span className="ops-item-meta">offers that still need your answer</span>
+                  <p className="card-eyebrow" style={{ marginBottom: 0 }}>Recruiter Outreach</p>
+                  <strong>{outreachCount}</strong>
+                  <span className="ops-item-meta">waiting on your reply</span>
                 </div>
                 <div className="ops-kpi">
                   <p className="card-eyebrow" style={{ marginBottom: 0 }}>Scheduled</p>
@@ -2764,14 +3277,14 @@ export default function DashboardClient({
                   <span className="ops-item-meta">interview times already confirmed</span>
                 </div>
                 <div className="ops-kpi">
-                  <p className="card-eyebrow" style={{ marginBottom: 0 }}>Still Waiting</p>
-                  <strong>{waitingReplyCount}</strong>
-                  <span className="ops-item-meta">recruiters yet to reply</span>
+                  <p className="card-eyebrow" style={{ marginBottom: 0 }}>In Process</p>
+                  <strong>{inProgressCount}</strong>
+                  <span className="ops-item-meta">active interview loops</span>
                 </div>
                 <div className="ops-kpi">
-                  <p className="card-eyebrow" style={{ marginBottom: 0 }}>In Process</p>
-                  <strong>{interviewingCount}</strong>
-                  <span className="ops-item-meta">active conversations moving forward</span>
+                  <p className="card-eyebrow" style={{ marginBottom: 0 }}>Rejected</p>
+                  <strong>{rejectedCount}</strong>
+                  <span className="ops-item-meta">closed opportunities</span>
                 </div>
               </div>
 
@@ -2785,7 +3298,7 @@ export default function DashboardClient({
                     <p className="card-eyebrow">Quick Log</p>
                     <h2 className="card-title">Company Action</h2>
                     <p className="card-body" style={{ marginBottom: 16 }}>
-                      Log the recruiter status here, and if they already gave you a time, add it below so the calendar and scheduled count update together.
+                      Keep it simple: log the company, the main contact, the stage, and only add a date when the interview is already scheduled.
                     </p>
                     <form className="ops-form" onSubmit={addResponse}>
                       <input className="field-input" placeholder="Company" value={responseDraft.company} onChange={(event) => setResponseDraft({ ...responseDraft, company: event.target.value })} />
@@ -2801,24 +3314,29 @@ export default function DashboardClient({
                       <select className="field-input" value={responseDraft.status} onChange={(event) => handleResponseStatusChange(event.target.value as ResponseStatus)}>
                         {RESPONSE_STATUS_OPTIONS.map((status) => <option key={status.value} value={status.value}>{status.label}</option>)}
                       </select>
-                      <p className="ops-item-meta" style={{ marginTop: -4 }}>
-                        Choose <strong style={{ color: "var(--text-primary)", fontWeight: 500 }}>Active Interview Process</strong> when the company has already replied and you are moving through interviews. Choose <strong style={{ color: "var(--text-primary)", fontWeight: 500 }}>Job Offer Awaiting Response</strong> when an offer is on the table and you still need to respond.
-                      </p>
-                      <input className="field-input" type="date" value={responseDraft.lastUpdated} onChange={(event) => setResponseDraft({ ...responseDraft, lastUpdated: event.target.value })} />
+                      {responseDraft.status === "Interview Scheduled" || responseDraft.status === "Interview in Progress" ? (
+                        <select className="field-input" value={responseDraft.interviewRound} onChange={(event) => setResponseDraft({ ...responseDraft, interviewRound: event.target.value as InterviewRound })}>
+                          {INTERVIEW_ROUND_OPTIONS.map((round) => (
+                            <option key={round || "round"} value={round}>
+                              {round || "Interview round"}
+                            </option>
+                          ))}
+                        </select>
+                      ) : null}
                       {schedulingStatusSelected ? (
                         <>
                           <input className="field-input" type="datetime-local" value={responseDraft.startsAt} onChange={(event) => setResponseDraft({ ...responseDraft, startsAt: event.target.value })} />
-                          <input className="field-input" placeholder="Zoom / phone / location" value={responseDraft.location} onChange={(event) => setResponseDraft({ ...responseDraft, location: event.target.value })} />
+                          <input className="field-input" placeholder="Zoom / location" value={responseDraft.location} onChange={(event) => setResponseDraft({ ...responseDraft, location: event.target.value })} />
                         </>
                       ) : null}
-                      <textarea className="field-textarea" placeholder="Notes: what they asked for, what you sent, what is scheduled, or where the conversation stands" value={responseDraft.notes} onChange={(event) => setResponseDraft({ ...responseDraft, notes: event.target.value })} />
+                      <textarea className="field-textarea" placeholder="Notes: what they asked for, what is scheduled, or where the conversation stands" value={responseDraft.notes} onChange={(event) => setResponseDraft({ ...responseDraft, notes: event.target.value })} />
                       <button className="btn-primary" type="submit">Save Action</button>
                     </form>
                   </div>
 
                   <div className="card">
                     <p className="card-eyebrow">Calendar View</p>
-                    <h2 className="card-title">Upcoming interviews and recruiter calls</h2>
+                    <h2 className="card-title">Upcoming interview schedule</h2>
                     <div className="week-grid">
                       {calendarDays.map((day) => (
                         <div className={`week-day ${day.isToday ? "today" : ""}`} key={day.dayKey}>
@@ -2838,7 +3356,7 @@ export default function DashboardClient({
                                   Delete
                                 </button>
                               </div>
-                              <span>{event.type} · {formatShortDateTime(event.startsAt)}</span>
+                              <span>{formatShortDateTime(event.startsAt)}</span>
                               {event.recruiterName ? <span>{event.recruiterName}</span> : null}
                               {event.location ? <span>{event.location}</span> : null}
                             </div>
@@ -2853,9 +3371,9 @@ export default function DashboardClient({
                   <div className="ops-layout">
                     <div className="card">
                       <p className="card-eyebrow">Response Tracker</p>
-                      <h2 className="card-title">Job offer awaiting further response</h2>
+                      <h2 className="card-title">Recruiter outreach awaiting your reply</h2>
                       <div className="ops-list ops-list-scroll">
-                        {groupedResponses.offerAwaitingResponse.length > 0 ? groupedResponses.offerAwaitingResponse.map((item) => (
+                        {groupedResponses.outreach.length > 0 ? groupedResponses.outreach.map((item) => (
                           <div className="ops-item" key={item.id}>
                             <div className="ops-item-row">
                               <div>
@@ -2883,13 +3401,13 @@ export default function DashboardClient({
                               </button>
                             </div>
                           </div>
-                        )) : <p className="empty-state">No logged offers are waiting on your response right now.</p>}
+                        )) : <p className="empty-state">No recruiter outreach is waiting on your reply right now.</p>}
                       </div>
                     </div>
 
                     <div className="card">
                       <p className="card-eyebrow">Response Tracker</p>
-                      <h2 className="card-title">Interviews and calls already scheduled</h2>
+                      <h2 className="card-title">Scheduled interviews</h2>
                       <div className="ops-list ops-list-scroll">
                         {groupedResponses.scheduled.length > 0 ? (
                           groupedResponses.scheduled.map((item) => (
@@ -2897,7 +3415,7 @@ export default function DashboardClient({
                               <div className="ops-item-row">
                                 <div>
                                   <div className="ops-item-title">{item.company} · {item.role}</div>
-                                  <div className="ops-item-meta">{item.recruiterName || "Recruiter not logged"} · {item.contactChannel}{item.contactHandle ? ` · ${item.contactHandle}` : ""}</div>
+                                  <div className="ops-item-meta">{item.recruiterName || "Recruiter not logged"} · {item.contactChannel}{item.contactHandle ? ` · ${item.contactHandle}` : ""}{item.interviewRound ? ` · ${formatRoundLabel(item.interviewRound)}` : ""}</div>
                                 </div>
                                 <span className="ops-chip sage">{item.status}</span>
                               </div>
@@ -2914,32 +3432,65 @@ export default function DashboardClient({
                                 <button
                                   type="button"
                                   className="mini-select"
-                                  onClick={() => deleteResponse(item.id)}
-                                >
-                                  Delete
-                                </button>
+                                onClick={() => deleteResponse(item.id)}
+                              >
+                                Delete
+                              </button>
+                            </div>
+                          </div>
+                          ))
+                        ) : <p className="empty-state">No future interviews are scheduled right now.</p>}
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="card">
+                    <p className="card-eyebrow">Interview History</p>
+                    <h2 className="card-title">Completed interview timeline</h2>
+                    <div className="ops-list ops-list-scroll">
+                      {groupedResponses.history.length > 0 ? groupedResponses.history.map(({ response: item, event }) => (
+                        <div className="ops-item" key={`${item.id}-${event?.id ?? "past"}`}>
+                          <div className="ops-item-row">
+                            <div>
+                              <div className="ops-item-title">{item.company} · {item.role}</div>
+                              <div className="ops-item-meta">
+                                {formatShortDateTime(event?.startsAt ?? "")}
+                                {event?.location ? ` · ${event.location}` : ""}
+                                {item.interviewRound ? ` · ${formatRoundLabel(item.interviewRound)}` : ""}
                               </div>
                             </div>
-                          ))
-                        ) : <p className="empty-state">No interview or recruiter call has been marked as scheduled yet.</p>}
-                      </div>
+                            <span className="ops-chip">Interview completed</span>
+                          </div>
+                          {item.notes ? <div className="ops-item-notes">{item.notes}</div> : null}
+                          <div className="ops-actions">
+                            <span className="ops-item-meta">Still tracked in your response history.</span>
+                            <select
+                              className="mini-select"
+                              value={item.status}
+                              onChange={(eventSelect) => updateResponseStatus(item.id, eventSelect.target.value as ResponseStatus)}
+                            >
+                              {RESPONSE_STATUS_OPTIONS.map((status) => <option key={status.value} value={status.value}>{status.label}</option>)}
+                            </select>
+                          </div>
+                        </div>
+                      )) : <p className="empty-state">Completed interviews will move here automatically after their scheduled time passes.</p>}
                     </div>
                   </div>
 
                   <div className="ops-layout">
                     <div className="card">
                       <p className="card-eyebrow">Response Tracker</p>
-                      <h2 className="card-title">Active interview process</h2>
+                      <h2 className="card-title">Interview in progress</h2>
                       <div className="ops-list ops-list-scroll">
-                        {groupedResponses.interviewing.length > 0 ? groupedResponses.interviewing.map((item) => (
+                        {groupedResponses.inProgress.length > 0 ? groupedResponses.inProgress.map((item) => (
                           <div className="ops-item" key={item.id}>
-                            <div className="ops-item-row">
-                              <div>
-                                <div className="ops-item-title">{item.company} · {item.role}</div>
-                                <div className="ops-item-meta">{item.recruiterName || "Recruiter not logged"} · {item.contactChannel}{item.contactHandle ? ` · ${item.contactHandle}` : ""}</div>
+                              <div className="ops-item-row">
+                                <div>
+                                  <div className="ops-item-title">{item.company} · {item.role}</div>
+                                  <div className="ops-item-meta">{item.recruiterName || "Recruiter not logged"} · {item.contactChannel}{item.contactHandle ? ` · ${item.contactHandle}` : ""}{item.interviewRound ? ` · ${formatRoundLabel(item.interviewRound)}` : ""}</div>
+                                </div>
+                                <span className="ops-chip sage">{item.status}</span>
                               </div>
-                              <span className="ops-chip sage">{item.status}</span>
-                            </div>
                             {item.notes ? <div className="ops-item-notes">{item.notes}</div> : null}
                             <div className="ops-actions">
                               <span className="ops-item-meta">Updated {formatShortDate(item.lastUpdated)}</span>
@@ -2959,22 +3510,22 @@ export default function DashboardClient({
                               </button>
                             </div>
                           </div>
-                        )) : <p className="empty-state">No opportunities are currently in the live interview process.</p>}
+                        )) : <p className="empty-state">No opportunities are currently in the interview process.</p>}
                       </div>
                     </div>
 
                     <div className="card">
                       <p className="card-eyebrow">Response Tracker</p>
-                      <h2 className="card-title">Waiting on recruiter reply</h2>
+                      <h2 className="card-title">Rejected opportunities</h2>
                       <div className="ops-list ops-list-scroll">
-                        {groupedResponses.waiting.length > 0 ? groupedResponses.waiting.map((item) => (
+                        {groupedResponses.rejected.length > 0 ? groupedResponses.rejected.map((item) => (
                           <div className="ops-item" key={item.id}>
                             <div className="ops-item-row">
                               <div>
                                 <div className="ops-item-title">{item.company} · {item.role}</div>
                                 <div className="ops-item-meta">{item.recruiterName || "Recruiter not logged"} · {item.contactChannel}{item.contactHandle ? ` · ${item.contactHandle}` : ""}</div>
                               </div>
-                              <span className={`ops-chip ${differenceInDays(item.lastUpdated) >= 3 ? "warn" : ""}`}>{item.status}</span>
+                              <span className="ops-chip">{item.status}</span>
                             </div>
                             {item.notes ? <div className="ops-item-notes">{item.notes}</div> : null}
                             <div className="ops-actions">
@@ -2995,12 +3546,146 @@ export default function DashboardClient({
                               </button>
                             </div>
                           </div>
-                        )) : <p className="empty-state">No recruiter conversations are sitting in a wait state.</p>}
+                        )) : <p className="empty-state">No rejected opportunities logged right now.</p>}
                       </div>
                     </div>
                   </div>
                 </div>
               )}
+            </div>
+          )}
+
+          {/* ── MY LEARNING ── */}
+          {mode === "my-learning" && (
+            <div className="section-fade">
+              <div className="section-header">
+                <div>
+                  <p className="header-eyebrow">My Learning</p>
+                  <h1 style={{ fontFamily: "'Playfair Display', serif", fontSize: 34, fontWeight: 500, lineHeight: 1.2 }}>
+                    Track four learning lanes without losing prior weeks
+                  </h1>
+                  <p className="header-sub" style={{ marginTop: 10 }}>
+                    Each checked day counts as 30 minutes. The grid resets automatically every Monday because the view only shows the current week, while older weeks stay in history for the chart.
+                  </p>
+                </div>
+                <button className="btn-ghost" onClick={() => setMode("home")}>
+                  {iconBack} Back
+                </button>
+              </div>
+
+              <div className="ops-kpi-grid" style={{ marginBottom: 20 }}>
+                <div className="ops-kpi">
+                  <p className="card-eyebrow" style={{ marginBottom: 0 }}>This Week</p>
+                  <strong>{learningWeekMinutes} min</strong>
+                  <span className="ops-item-meta">{learningCompletedDays} completed day{learningCompletedDays === 1 ? "" : "s"}</span>
+                </div>
+                <div className="ops-kpi">
+                  <p className="card-eyebrow" style={{ marginBottom: 0 }}>Active Tiles</p>
+                  <strong>{learningTopics.filter((topic) => topic.title.trim()).length}</strong>
+                  <span className="ops-item-meta">named learning tracks</span>
+                </div>
+                <div className="ops-kpi">
+                  <p className="card-eyebrow" style={{ marginBottom: 0 }}>Weekly Touchpoints</p>
+                  <strong>{learningStreakCount}</strong>
+                  <span className="ops-item-meta">days with any learning logged</span>
+                </div>
+              </div>
+
+              <div
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
+                  gap: 20,
+                  alignItems: "start",
+                }}
+              >
+                <div
+                  style={{
+                    display: "grid",
+                    gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
+                    gap: 20,
+                  }}
+                >
+                  {learningTopics.map((topic) => (
+                    <div className="card" key={topic.id}>
+                      <p className="card-eyebrow">Learning Tile {topic.sortOrder}</p>
+                      <div style={{ display: "flex", gap: 10, alignItems: "center", marginBottom: 14 }}>
+                        <input
+                          className="field-input"
+                          value={learningTitleDrafts[topic.id] ?? topic.title}
+                          onChange={(event) => setLearningTitleDrafts((current) => ({
+                            ...current,
+                            [topic.id]: event.target.value,
+                          }))}
+                          placeholder={`Add title for tile ${topic.sortOrder}`}
+                        />
+                        <button
+                          type="button"
+                          className="btn-ghost"
+                          onClick={() => {
+                            startTransition(() => {
+                              void updateLearningTopic(topic.id);
+                            });
+                          }}
+                        >
+                          Save
+                        </button>
+                      </div>
+                      <div style={{ display: "grid", gridTemplateColumns: "repeat(7, minmax(0, 1fr))", gap: 8 }}>
+                        {learningCurrentWeekDates.map((date) => {
+                          const parsed = new Date(`${date}T00:00:00`);
+                          const label = Number.isNaN(parsed.getTime())
+                            ? date
+                            : parsed.toLocaleDateString(undefined, { weekday: "short" });
+                          const checked = learningCompletedKeys.has(`${topic.id}-${date}`);
+                          return (
+                            <label
+                              key={`${topic.id}-${date}`}
+                              style={{
+                                display: "grid",
+                                justifyItems: "center",
+                                gap: 8,
+                                padding: "12px 8px",
+                                borderRadius: 12,
+                                border: "1px solid var(--border-light)",
+                                background: checked ? "rgba(90, 141, 225, 0.08)" : "#FFFFFF",
+                              }}
+                            >
+                              <span style={{ fontSize: 12, color: "var(--text-primary)", fontWeight: 500 }}>{label}</span>
+                              <input
+                                type="checkbox"
+                                checked={checked}
+                                onChange={(event) => {
+                                  startTransition(() => {
+                                    void toggleLearningSession(topic.id, date, event.target.checked);
+                                  });
+                                }}
+                                style={{ width: 16, height: 16, accentColor: "#5A8DE1" }}
+                              />
+                              <span style={{ fontSize: 11, color: "var(--text-secondary)" }}>30m</span>
+                            </label>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+
+                <div style={{ display: "grid", gap: 20 }}>
+                  <LearningTrendChart topics={learningTopics} history={learningHistory} />
+                  <LearningHeatmap history={learningHistory} />
+                  <div className="card">
+                    <p className="card-eyebrow">Week Notes</p>
+                    <h2 className="card-title">How this works</h2>
+                    <div className="alignment-list">
+                      <div className="alignment-item">The checkboxes shown here are only for the current week.</div>
+                      <div className="alignment-item">At Sunday 11:59 PM, the week closes naturally. Monday starts with a fresh grid.</div>
+                      <div className="alignment-item">Past weeks are kept in the database and continue feeding the trend chart.</div>
+                      <div className="alignment-item">Each checked day is stored as 30 minutes for that topic.</div>
+                    </div>
+                  </div>
+                </div>
+              </div>
             </div>
           )}
 
@@ -3336,12 +4021,180 @@ export default function DashboardClient({
                 </button>
               </div>
 
-              <div className="search-grid" style={{ marginBottom: 20 }}>
-                {/* 1. Parse Resume */}
+              <div className="card" style={{ marginBottom: 20 }}>
+                <p className="card-eyebrow">Primary Workflow</p>
+                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  {iconMail}
+                  <h2 className="card-title" style={{ marginBottom: 0 }}>Gmail Monitoring</h2>
+                </div>
+                <p className="card-body" style={{ marginTop: 8, marginBottom: 18 }}>
+                  Review what Gmail found, which applications it matched, and what status changed from those emails.
+                </p>
+                {data?.gmail_connection ? (
+                  <div style={{ display: "grid", gap: 18 }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", gap: 16, flexWrap: "wrap", alignItems: "center" }}>
+                      <div style={{ display: "grid", gap: 10 }}>
+                        <div className="connection-info">
+                          <span className="connection-dot" />
+                          {data.gmail_connection.email}
+                        </div>
+                        <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
+                          <div className="score-item" style={{ minWidth: 120 }}>
+                            <div className="score-item-label">
+                              <span>Matched</span>
+                              <span className="score-item-val">{gmailCheckStats.matched}</span>
+                            </div>
+                          </div>
+                          <div className="score-item" style={{ minWidth: 120 }}>
+                            <div className="score-item-label">
+                              <span>Updated</span>
+                              <span className="score-item-val">{gmailCheckStats.updated}</span>
+                            </div>
+                          </div>
+                          <div className="score-item" style={{ minWidth: 120 }}>
+                            <div className="score-item-label">
+                              <span>Unmatched</span>
+                              <span className="score-item-val">{gmailCheckStats.unmatched}</span>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                      <button
+                        className="btn-primary"
+                        onClick={() => startTransition(() => { void handleCheckGmail(); })}
+                      >
+                        {iconMail} Check Gmail Now
+                      </button>
+                    </div>
+
+                    {statusUpdates.length > 0 ? (
+                      <div style={{ display: "grid", gap: 12 }}>
+                        <p className="field-label" style={{ marginBottom: 0 }}>Status changes pulled from Gmail</p>
+                        <div style={{ display: "grid", gap: 12 }}>
+                          {statusUpdates.map((update) => (
+                            <div
+                              key={`${update.id}-${update.job_id}`}
+                              style={{
+                                border: "0.5px solid var(--border-light)",
+                                borderRadius: 14,
+                                padding: "14px 16px",
+                                background: "var(--surface)",
+                                display: "grid",
+                                gap: 8,
+                              }}
+                            >
+                              <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "flex-start" }}>
+                                <div>
+                                  <strong style={{ display: "block", fontSize: 15, color: "var(--text-primary)" }}>
+                                    {update.company} · {update.title}
+                                  </strong>
+                                  <span style={{ fontSize: 12, color: "var(--text-secondary)" }}>
+                                    {update.old_status} → {update.new_status}
+                                  </span>
+                                </div>
+                                <span className="badge badge-gold" style={{ whiteSpace: "nowrap" }}>
+                                  {update.matched_from || "gmail match"}
+                                </span>
+                              </div>
+                              {update.email_subject ? (
+                                <div style={{ fontSize: 13, color: "var(--text-primary)", fontWeight: 500 }}>
+                                  {update.email_subject}
+                                </div>
+                              ) : null}
+                              {update.email_snippet ? (
+                                <div style={{ fontSize: 13, color: "var(--text-secondary)", lineHeight: 1.55 }}>
+                                  {update.email_snippet}
+                                </div>
+                              ) : null}
+                              <div style={{ fontSize: 12, color: "var(--text-muted)" }}>
+                                {formatShortDateTime(update.observed_at)}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    ) : (
+                      <p className="empty-state">No Gmail-driven status changes yet.</p>
+                    )}
+
+                    {(actionNeededEmails.length > 0 || importantUpdateEmails.length > 0) && (
+                      <div style={{ display: "grid", gap: 12 }}>
+                        {actionNeededEmails.length > 0 ? (
+                          <div style={{ display: "grid", gap: 12 }}>
+                            <p className="field-label" style={{ marginBottom: 0 }}>Action needed</p>
+                            <div style={{ display: "grid", gap: 12 }}>
+                              {actionNeededEmails.map((email) => (
+                                <div
+                                  key={email.id}
+                                  style={{
+                                    border: "0.5px solid rgba(199, 133, 51, 0.28)",
+                                    borderRadius: 14,
+                                    padding: "14px 16px",
+                                    background: "rgba(199, 133, 51, 0.06)",
+                                    display: "grid",
+                                    gap: 8,
+                                  }}
+                                >
+                                  <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "flex-start" }}>
+                                    <strong style={{ fontSize: 14, color: "var(--text-primary)" }}>{email.subject}</strong>
+                                    <span className="badge badge-gold">{email.label}</span>
+                                  </div>
+                                  <div style={{ fontSize: 12, color: "var(--text-secondary)" }}>{email.from}</div>
+                                  <div style={{ fontSize: 13, color: "var(--text-primary)", lineHeight: 1.55 }}>{email.snippet}</div>
+                                  <div style={{ fontSize: 12, color: "var(--text-muted)" }}>{email.date}</div>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        ) : null}
+
+                        {importantUpdateEmails.length > 0 ? (
+                          <div style={{ display: "grid", gap: 12 }}>
+                            <p className="field-label" style={{ marginBottom: 0 }}>Important updates</p>
+                            <div style={{ display: "grid", gap: 10 }}>
+                              {importantUpdateEmails.map((email) => (
+                                <div className="email-card" key={email.id}>
+                                  <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "flex-start" }}>
+                                    <strong>{email.subject}</strong>
+                                    <span className="badge badge-success">{email.label}</span>
+                                  </div>
+                                  <p className="from">{email.from}</p>
+                                  <p className="date">{email.date}</p>
+                                  <p className="snippet">{email.snippet}</p>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        ) : null}
+                      </div>
+                    )}
+
+                    {emails.length > 0 && actionNeededEmails.length === 0 && importantUpdateEmails.length === 0 ? (
+                      <p className="empty-state">No high-priority Gmail items were found in the latest scan.</p>
+                    ) : null}
+                  </div>
+                ) : (
+                  <div style={{ display: "grid", gap: 12 }}>
+                    <p className="empty-state">Gmail not connected.</p>
+                    <a href={`${API_BASE}/gmail/connect`} className="btn-primary" style={{ width: "fit-content" }}>
+                      Connect Gmail {iconArrow}
+                    </a>
+                  </div>
+                )}
+              </div>
+
+              <div
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: "0.9fr 0.9fr 1.2fr",
+                  gap: 20,
+                  alignItems: "start",
+                }}
+              >
                 <div className="card">
-                  <p className="card-eyebrow">Step 01</p>
+                  <p className="card-eyebrow">Secondary</p>
                   <h2 className="card-title">Parse Resume</h2>
-                  <p className="card-body">Upload your resume to run the ATS parser and populate the job matcher.</p>
+                  <p className="card-body">Still available when you want to refresh the matcher.</p>
                   <form className="form-grid" onSubmit={handleResumeSubmit}>
                     <div className="field">
                       <label className="field-label">Resume text</label>
@@ -3349,7 +4202,7 @@ export default function DashboardClient({
                         className="field-textarea tall"
                         value={resumeText}
                         onChange={(e) => setResumeText(e.target.value)}
-                        placeholder="Paste your experience, skills, certifications, and tools — or upload a PDF below."
+                        placeholder="Paste experience, skills, and tools — or upload a PDF below."
                       />
                     </div>
                     <div className="field">
@@ -3363,21 +4216,20 @@ export default function DashboardClient({
                       />
                     </div>
                     <div>
-                      <button className="btn-primary" type="submit" disabled={isPending}>
-                        Extract Keywords {iconArrow}
+                      <button className="btn-ghost" type="submit" disabled={isPending}>
+                        Extract Keywords
                       </button>
                     </div>
                   </form>
                 </div>
 
-                {/* 2. ATS Profile */}
                 <div className="card">
-                  <p className="card-eyebrow">Step 02</p>
+                  <p className="card-eyebrow">Secondary</p>
                   <h2 className="card-title">ATS Profile</h2>
-                  <p className="card-body">Weighted keywords and candidate archetype from the latest parsed resume.</p>
+                  <p className="card-body">Current parsed resume snapshot.</p>
                   {data?.resume ? (
                     <>
-                      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 16 }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
                         <span style={{ fontSize: 12, color: "var(--text-muted)" }}>{data.resume.filename}</span>
                         <span className="badge badge-gold">Parsed</span>
                       </div>
@@ -3393,10 +4245,10 @@ export default function DashboardClient({
                         </div>
                       )}
                       <div className="keyword-cloud">
-                        {data.keywords.map((kw) => (
+                        {data.keywords.slice(0, 10).map((kw) => (
                           <div className="keyword-chip" key={`${kw.category}-${kw.keyword}`}>
                             <strong>{kw.keyword}</strong>
-                            <small>{kw.category} · {kw.score.toFixed(1)}</small>
+                            <small>{kw.category}</small>
                           </div>
                         ))}
                       </div>
@@ -3405,71 +4257,11 @@ export default function DashboardClient({
                     <p className="empty-state">No resume parsed yet.</p>
                   )}
                 </div>
-              </div>
 
-              <div className="search-grid">
-                {/* 3. Gmail */}
                 <div className="card">
-                  <p className="card-eyebrow">Step 03</p>
-                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                    {iconMail}
-                    <h2 className="card-title" style={{ marginBottom: 0 }}>Gmail Monitor</h2>
-                  </div>
-                  <p className="card-body" style={{ marginTop: 8 }}>
-                    Authenticate via Google OAuth, then scan recent job-related email.
-                  </p>
-                  {data?.gmail_connection ? (
-                    <div>
-                      <div className="connection-info">
-                        <span className="connection-dot" />
-                        {data.gmail_connection.email}
-                      </div>
-                      <button
-                        className="btn-ghost"
-                        onClick={() => startTransition(() => { void handleCheckGmail(); })}
-                      >
-                        {iconMail} Check Gmail Now
-                      </button>
-                      {statusUpdates.length > 0 && (
-                        <div style={{ marginTop: 16, display: "grid", gap: 8 }}>
-                          <p className="field-label" style={{ marginBottom: 0 }}>Latest status changes</p>
-                          <div className="alignment-list">
-                            {statusUpdates.map((update) => (
-                              <div className="alignment-item" key={`${update.id}-${update.job_id}`}>
-                                {update.title}: {update.old_status} → {update.new_status}
-                              </div>
-                            ))}
-                          </div>
-                        </div>
-                      )}
-                      {emails.length > 0 && (
-                        <div style={{ display: "grid", gap: 10, marginTop: 20 }}>
-                          {emails.map((email) => (
-                            <div className="email-card" key={email.id}>
-                              <strong>{email.subject || "No subject"}</strong>
-                              <p className="from">{email.from}</p>
-                              <p className="date">{email.date}</p>
-                              <p className="snippet">{email.snippet}</p>
-                            </div>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-                  ) : (
-                    <div style={{ display: "grid", gap: 12 }}>
-                      <p className="empty-state">Gmail not connected.</p>
-                      <a href={`${API_BASE}/gmail/connect`} className="btn-primary" style={{ width: "fit-content" }}>
-                        Connect Gmail {iconArrow}
-                      </a>
-                    </div>
-                  )}
-                </div>
-
-                {/* 4. Matched Jobs */}
-                <div className="card">
-                  <p className="card-eyebrow">Step 04</p>
+                  <p className="card-eyebrow">Secondary</p>
                   <h2 className="card-title">Matched Jobs</h2>
-                  <p className="card-body">Seeded matches from the keyword parser.</p>
+                  <p className="card-body">Lower-priority seeded matches from the resume parser.</p>
                   {data?.jobs?.length ? (
                     <div className="job-scroll">
                       {data.jobs.map((job) => (
@@ -3491,16 +4283,6 @@ export default function DashboardClient({
                             }
                           </div>
                           <p className="eval-text" style={{ fontSize: 12.5, marginTop: 10 }}>{job.evaluation_summary}</p>
-                          <div className="score-grid">
-                            {Object.entries(job.score_breakdown).map(([key, val]) => (
-                              <div className="score-item" key={key}>
-                                <div className="score-item-label">
-                                  <span>{SCORE_LABELS[key] ?? key}</span>
-                                  <span className="score-item-val">{val.toFixed(1)}</span>
-                                </div>
-                              </div>
-                            ))}
-                          </div>
                           <div className="btn-row" style={{ marginTop: 8 }}>
                             <a href={job.job_url} target="_blank" rel="noreferrer" className="btn-dark" style={{ fontSize: 12 }}>
                               View Posting {iconArrow}
